@@ -1,0 +1,1912 @@
+{
+  "data_summary": {
+    "total_pokemon": 1077,
+    "num_synergies": 31,
+    "total_bots_loaded": 726,
+    "by_rarity": {
+      "RARE": 205,
+      "COMMON": 94,
+      "UNCOMMON": 200,
+      "SPECIAL": 68,
+      "EPIC": 175,
+      "UNIQUE": 156,
+      "ULTRA": 43,
+      "LEGENDARY": 97,
+      "HATCH": 39
+    }
+  },
+  "combat_surrogate_metrics": {
+    "val_accuracy": 0.9066666960716248,
+    "val_margin_mae": 1.5651881694793701,
+    "samples": 2000
+  },
+  "botv2_meta_top15": [
+    {
+      "Synergy": "FLORA",
+      "Sample_Matches": 22,
+      "Combat_Win_Rate_%": 100.0,
+      "Avg_Bot_ELO": 1242.0,
+      "Num_Bots_In_DB": 9
+    },
+    {
+      "Synergy": "GRASS",
+      "Sample_Matches": 25,
+      "Combat_Win_Rate_%": 88.0,
+      "Avg_Bot_ELO": 1191.0,
+      "Num_Bots_In_DB": 15
+    },
+    {
+      "Synergy": "DRAGON",
+      "Sample_Matches": 109,
+      "Combat_Win_Rate_%": 72.5,
+      "Avg_Bot_ELO": 1218.0,
+      "Num_Bots_In_DB": 62
+    },
+    {
+      "Synergy": "FIGHTING",
+      "Sample_Matches": 71,
+      "Combat_Win_Rate_%": 69.0,
+      "Avg_Bot_ELO": 1247.0,
+      "Num_Bots_In_DB": 37
+    },
+    {
+      "Synergy": "GOURMET",
+      "Sample_Matches": 44,
+      "Combat_Win_Rate_%": 68.2,
+      "Avg_Bot_ELO": 1210.0,
+      "Num_Bots_In_DB": 29
+    },
+    {
+      "Synergy": "ICE",
+      "Sample_Matches": 79,
+      "Combat_Win_Rate_%": 67.1,
+      "Avg_Bot_ELO": 1266.0,
+      "Num_Bots_In_DB": 35
+    },
+    {
+      "Synergy": "ARTIFICIAL",
+      "Sample_Matches": 75,
+      "Combat_Win_Rate_%": 66.7,
+      "Avg_Bot_ELO": 1293.0,
+      "Num_Bots_In_DB": 44
+    },
+    {
+      "Synergy": "HUMAN",
+      "Sample_Matches": 62,
+      "Combat_Win_Rate_%": 66.1,
+      "Avg_Bot_ELO": 1219.0,
+      "Num_Bots_In_DB": 26
+    },
+    {
+      "Synergy": "NORMAL",
+      "Sample_Matches": 114,
+      "Combat_Win_Rate_%": 63.2,
+      "Avg_Bot_ELO": 1148.0,
+      "Num_Bots_In_DB": 54
+    },
+    {
+      "Synergy": "GHOST",
+      "Sample_Matches": 83,
+      "Combat_Win_Rate_%": 59.0,
+      "Avg_Bot_ELO": 1178.0,
+      "Num_Bots_In_DB": 42
+    },
+    {
+      "Synergy": "FOSSIL",
+      "Sample_Matches": 29,
+      "Combat_Win_Rate_%": 58.6,
+      "Avg_Bot_ELO": 1286.0,
+      "Num_Bots_In_DB": 20
+    },
+    {
+      "Synergy": "FLYING",
+      "Sample_Matches": 71,
+      "Combat_Win_Rate_%": 57.7,
+      "Avg_Bot_ELO": 1252.0,
+      "Num_Bots_In_DB": 35
+    },
+    {
+      "Synergy": "SOUND",
+      "Sample_Matches": 91,
+      "Combat_Win_Rate_%": 56.0,
+      "Avg_Bot_ELO": 1194.0,
+      "Num_Bots_In_DB": 51
+    },
+    {
+      "Synergy": "PSYCHIC",
+      "Sample_Matches": 70,
+      "Combat_Win_Rate_%": 54.3,
+      "Avg_Bot_ELO": 1183.0,
+      "Num_Bots_In_DB": 38
+    },
+    {
+      "Synergy": "AQUATIC",
+      "Sample_Matches": 64,
+      "Combat_Win_Rate_%": 53.1,
+      "Avg_Bot_ELO": 1209.0,
+      "Num_Bots_In_DB": 39
+    }
+  ],
+  "map_elites_archive": [
+    {
+      "Synergy_Niche": "FIGHTING",
+      "Econ_Archetype": "STANDARD_ECON_50G",
+      "Best_Agent": "Fighting_Steel_Bastion_Specialist",
+      "Avg_Placement": 6.38,
+      "Top4_Rate_%": 12.5,
+      "Win_Rate_%": 0.0,
+      "Signature_Board": "DOLLIV(2*), GOLBAT(2*), QUILLADIN(2*), MACHOP(1*), OSHAWOTT(1*), GRAVELER(2*)"
+    },
+    {
+      "Synergy_Niche": "DARK",
+      "Econ_Archetype": "HYPER_ROLL",
+      "Best_Agent": "Dark_Assassin_Crit_Specialist",
+      "Avg_Placement": 6.38,
+      "Top4_Rate_%": 12.5,
+      "Win_Rate_%": 0.0,
+      "Signature_Board": "LARVITAR(1*), WIGLETT(1*), FLORAGATO(2*), DEINO(1*), ABSOL(3*), DOLLIV(2*)"
+    },
+    {
+      "Synergy_Niche": "FIRE",
+      "Econ_Archetype": "STANDARD_ECON_50G",
+      "Best_Agent": "Econ_50g_Fast8_Compounder",
+      "Avg_Placement": 6.5,
+      "Top4_Rate_%": 0.0,
+      "Win_Rate_%": 0.0,
+      "Signature_Board": "SWINUB(1*), METAPOD(2*), PIPLUP(1*), KOFFING(1*), DRILBUR(1*), CUBONE(1*)"
+    },
+    {
+      "Synergy_Niche": "NORMAL",
+      "Econ_Archetype": "HYPER_ROLL",
+      "Best_Agent": "HyperRoll_3Star_Collector",
+      "Avg_Placement": 6.88,
+      "Top4_Rate_%": 0.0,
+      "Win_Rate_%": 0.0,
+      "Signature_Board": "HERDIER(2*), QUILLADIN(2*), SLIGOO(2*), GREAVARD(1*), MILTANK(3*), IGGLYBUFF(1*)"
+    },
+    {
+      "Synergy_Niche": "ARTIFICIAL",
+      "Econ_Archetype": "LOSE_STREAK_CASHOUT",
+      "Best_Agent": "LoseStreak_Cashout_Pivot",
+      "Avg_Placement": 7.0,
+      "Top4_Rate_%": 12.5,
+      "Win_Rate_%": 0.0,
+      "Signature_Board": "DOLLIV(2*), KLANG(2*), PRINPLUP(2*), ROTOM_FROST(3*), ELECTRODE(2*), HELIOPTILE(1*)"
+    },
+    {
+      "Synergy_Niche": "WATER",
+      "Econ_Archetype": "STANDARD_ECON_50G",
+      "Best_Agent": "Water_Mana_Control_Specialist",
+      "Avg_Placement": 7.12,
+      "Top4_Rate_%": 0.0,
+      "Win_Rate_%": 0.0,
+      "Signature_Board": "WARTORTLE(2*), FENNEKIN(1*), FORRETRESS(2*), KAKUNA(2*), SEADRA(2*), HORSEA(1*)"
+    },
+    {
+      "Synergy_Niche": "FIRE",
+      "Econ_Archetype": "TEMPO_WIN_STREAK",
+      "Best_Agent": "Fire_Blaze_Aggro_Specialist",
+      "Avg_Placement": 7.25,
+      "Top4_Rate_%": 0.0,
+      "Win_Rate_%": 0.0,
+      "Signature_Board": "LITWICK(1*), CHARMANDER(1*), MARILL(2*), TENTACOOL(1*), FENNEKIN(1*), POLIWHIRL(2*)"
+    },
+    {
+      "Synergy_Niche": "FIGHTING",
+      "Econ_Archetype": "TEMPO_WIN_STREAK",
+      "Best_Agent": "Tempo_WinStreak_Snowballer",
+      "Avg_Placement": 7.25,
+      "Top4_Rate_%": 0.0,
+      "Win_Rate_%": 0.0,
+      "Signature_Board": "TANGELA(1*), BRAIXEN(2*), PIKACHU(2*), LICKILICKY(2*), AIPOM(1*), JIGGLYPUFF(2*)"
+    },
+    {
+      "Synergy_Niche": "WILD",
+      "Econ_Archetype": "STANDARD_ECON_50G",
+      "Best_Agent": "Econ_50g_Fast8_Compounder",
+      "Avg_Placement": 7.38,
+      "Top4_Rate_%": 0.0,
+      "Win_Rate_%": 0.0,
+      "Signature_Board": "ZUBAT(1*), ZUBAT(1*), LILIGANT(2*), FEAROW(2*), LILEEP(1*), MARACTUS(3*)"
+    },
+    {
+      "Synergy_Niche": "FAIRY",
+      "Econ_Archetype": "TEMPO_WIN_STREAK",
+      "Best_Agent": "Tempo_WinStreak_Snowballer",
+      "Avg_Placement": 7.5,
+      "Top4_Rate_%": 0.0,
+      "Win_Rate_%": 0.0,
+      "Signature_Board": "FLABEBE(1*), FLAFFY(2*), GRIMER(1*), BRAIXEN(2*), JIGGLYPUFF(2*), WHISMUR(1*)"
+    },
+    {
+      "Synergy_Niche": "MONSTER",
+      "Econ_Archetype": "TEMPO_WIN_STREAK",
+      "Best_Agent": "Tempo_WinStreak_Snowballer",
+      "Avg_Placement": 7.75,
+      "Top4_Rate_%": 0.0,
+      "Win_Rate_%": 0.0,
+      "Signature_Board": "PILOSWINE(2*), ESPURR(1*), DEWPIDER(1*), AMBIPOM(2*), PIKACHU(2*), LINOONE(2*)"
+    }
+  ],
+  "head_to_head_tournament": [
+    {
+      "Agent_Name": "Water_Mana_Control_Specialist",
+      "Archetype": "STANDARD_ECON_50G",
+      "Target_Synergy": "WATER",
+      "Avg_Placement": 3.33,
+      "Top4_Rate_%": 76.7,
+      "Win_Rate_%": 13.3,
+      "Avg_Bank_Gold": 79.2,
+      "Avg_Final_Level": 9.0,
+      "Record_DPS_Unit": "PRIMAL_KYOGRE(4*) (1017 dmg)",
+      "Record_Tank_Unit": "PALKIA(3*) (1010 tank)"
+    },
+    {
+      "Agent_Name": "HyperRoll_3Star_Collector",
+      "Archetype": "HYPER_ROLL",
+      "Target_Synergy": "NORMAL",
+      "Avg_Placement": 3.4,
+      "Top4_Rate_%": 76.7,
+      "Win_Rate_%": 26.7,
+      "Avg_Bank_Gold": 53.0,
+      "Avg_Final_Level": 7.93,
+      "Record_DPS_Unit": "MELOETTA(3*) (1336 dmg)",
+      "Record_Tank_Unit": "REGIGIGAS(3*) (1584 tank)"
+    },
+    {
+      "Agent_Name": "Econ_50g_Fast8_Compounder",
+      "Archetype": "STANDARD_ECON_50G",
+      "Target_Synergy": "FLEX",
+      "Avg_Placement": 3.53,
+      "Top4_Rate_%": 66.7,
+      "Win_Rate_%": 16.7,
+      "Avg_Bank_Gold": 56.3,
+      "Avg_Final_Level": 8.3,
+      "Record_DPS_Unit": "MELOETTA(3*) (1336 dmg)",
+      "Record_Tank_Unit": "REGIGIGAS(3*) (1584 tank)"
+    },
+    {
+      "Agent_Name": "Fighting_Steel_Bastion_Specialist",
+      "Archetype": "STANDARD_ECON_50G",
+      "Target_Synergy": "FIGHTING",
+      "Avg_Placement": 3.8,
+      "Top4_Rate_%": 66.7,
+      "Win_Rate_%": 13.3,
+      "Avg_Bank_Gold": 12.2,
+      "Avg_Final_Level": 8.37,
+      "Record_DPS_Unit": "GALLADE(3*) (1247 dmg)",
+      "Record_Tank_Unit": "IRON_VALIANT(3*) (2609 tank)"
+    },
+    {
+      "Agent_Name": "Dark_Assassin_Crit_Specialist",
+      "Archetype": "HYPER_ROLL",
+      "Target_Synergy": "DARK",
+      "Avg_Placement": 4.67,
+      "Top4_Rate_%": 46.7,
+      "Win_Rate_%": 16.7,
+      "Avg_Bank_Gold": 101.4,
+      "Avg_Final_Level": 6.93,
+      "Record_DPS_Unit": "SHADOW_LUGIA(3*) (1195 dmg)",
+      "Record_Tank_Unit": "GUZZLORD(3*) (2212 tank)"
+    },
+    {
+      "Agent_Name": "Tempo_WinStreak_Snowballer",
+      "Archetype": "TEMPO_WIN_STREAK",
+      "Target_Synergy": "FLEX",
+      "Avg_Placement": 5.53,
+      "Top4_Rate_%": 23.3,
+      "Win_Rate_%": 3.3,
+      "Avg_Bank_Gold": 42.6,
+      "Avg_Final_Level": 7.77,
+      "Record_DPS_Unit": "MELOETTA(3*) (1336 dmg)",
+      "Record_Tank_Unit": "REGIGIGAS(3*) (1584 tank)"
+    },
+    {
+      "Agent_Name": "Fire_Blaze_Aggro_Specialist",
+      "Archetype": "TEMPO_WIN_STREAK",
+      "Target_Synergy": "FIRE",
+      "Avg_Placement": 5.8,
+      "Top4_Rate_%": 23.3,
+      "Win_Rate_%": 3.3,
+      "Avg_Bank_Gold": 42.7,
+      "Avg_Final_Level": 7.67,
+      "Record_DPS_Unit": "HO_OH(3*) (1166 dmg)",
+      "Record_Tank_Unit": "PRIMAL_GROUDON(4*) (1470 tank)"
+    },
+    {
+      "Agent_Name": "LoseStreak_Cashout_Pivot",
+      "Archetype": "LOSE_STREAK_CASHOUT",
+      "Target_Synergy": "ARTIFICIAL",
+      "Avg_Placement": 5.93,
+      "Top4_Rate_%": 20.0,
+      "Win_Rate_%": 6.7,
+      "Avg_Bank_Gold": 50.1,
+      "Avg_Final_Level": 6.67,
+      "Record_DPS_Unit": "MEWTWO(3*) (1795 dmg)",
+      "Record_Tank_Unit": "SILVALLY(3*) (1579 tank)"
+    }
+  ],
+  "generation_progression": [
+    {
+      "Generation": 1,
+      "Agent": "Econ_50g_Fast8_Compounder",
+      "Archetype": "STANDARD_ECON_50G",
+      "Synergy": "FIRE",
+      "Avg_Placement": 6.5,
+      "Top4_%": 0.0,
+      "Win_%": 0.0,
+      "Avg_Stage": 20.6,
+      "Avg_2Star": 3.0,
+      "Avg_3Star": 0.0
+    },
+    {
+      "Generation": 1,
+      "Agent": "Tempo_WinStreak_Snowballer",
+      "Archetype": "TEMPO_WIN_STREAK",
+      "Synergy": "FAIRY",
+      "Avg_Placement": 8.0,
+      "Top4_%": 0.0,
+      "Win_%": 0.0,
+      "Avg_Stage": 18.1,
+      "Avg_2Star": 2.25,
+      "Avg_3Star": 0.0
+    },
+    {
+      "Generation": 1,
+      "Agent": "HyperRoll_3Star_Collector",
+      "Archetype": "HYPER_ROLL",
+      "Synergy": "NORMAL",
+      "Avg_Placement": 7.62,
+      "Top4_%": 0.0,
+      "Win_%": 0.0,
+      "Avg_Stage": 18.8,
+      "Avg_2Star": 2.88,
+      "Avg_3Star": 0.0
+    },
+    {
+      "Generation": 1,
+      "Agent": "LoseStreak_Cashout_Pivot",
+      "Archetype": "LOSE_STREAK_CASHOUT",
+      "Synergy": "ARTIFICIAL",
+      "Avg_Placement": 7.62,
+      "Top4_%": 0.0,
+      "Win_%": 0.0,
+      "Avg_Stage": 18.1,
+      "Avg_2Star": 5.12,
+      "Avg_3Star": 0.0
+    },
+    {
+      "Generation": 1,
+      "Agent": "Fire_Blaze_Aggro_Specialist",
+      "Archetype": "TEMPO_WIN_STREAK",
+      "Synergy": "FIRE",
+      "Avg_Placement": 7.38,
+      "Top4_%": 0.0,
+      "Win_%": 0.0,
+      "Avg_Stage": 19.5,
+      "Avg_2Star": 3.0,
+      "Avg_3Star": 0.0
+    },
+    {
+      "Generation": 1,
+      "Agent": "Water_Mana_Control_Specialist",
+      "Archetype": "STANDARD_ECON_50G",
+      "Synergy": "WATER",
+      "Avg_Placement": 7.88,
+      "Top4_%": 0.0,
+      "Win_%": 0.0,
+      "Avg_Stage": 18.4,
+      "Avg_2Star": 2.62,
+      "Avg_3Star": 0.0
+    },
+    {
+      "Generation": 1,
+      "Agent": "Fighting_Steel_Bastion_Specialist",
+      "Archetype": "STANDARD_ECON_50G",
+      "Synergy": "FIGHTING",
+      "Avg_Placement": 7.5,
+      "Top4_%": 0.0,
+      "Win_%": 0.0,
+      "Avg_Stage": 20.4,
+      "Avg_2Star": 2.75,
+      "Avg_3Star": 0.0
+    },
+    {
+      "Generation": 1,
+      "Agent": "Dark_Assassin_Crit_Specialist",
+      "Archetype": "HYPER_ROLL",
+      "Synergy": "DARK",
+      "Avg_Placement": 6.88,
+      "Top4_%": 0.0,
+      "Win_%": 0.0,
+      "Avg_Stage": 20.2,
+      "Avg_2Star": 2.0,
+      "Avg_3Star": 0.0
+    },
+    {
+      "Generation": 2,
+      "Agent": "Econ_50g_Fast8_Compounder",
+      "Archetype": "STANDARD_ECON_50G",
+      "Synergy": "FIGHTING",
+      "Avg_Placement": 7.12,
+      "Top4_%": 0.0,
+      "Win_%": 0.0,
+      "Avg_Stage": 19.5,
+      "Avg_2Star": 3.0,
+      "Avg_3Star": 0.0
+    },
+    {
+      "Generation": 2,
+      "Agent": "Tempo_WinStreak_Snowballer",
+      "Archetype": "TEMPO_WIN_STREAK",
+      "Synergy": "FIGHTING",
+      "Avg_Placement": 7.25,
+      "Top4_%": 0.0,
+      "Win_%": 0.0,
+      "Avg_Stage": 19.8,
+      "Avg_2Star": 3.0,
+      "Avg_3Star": 0.0
+    },
+    {
+      "Generation": 2,
+      "Agent": "HyperRoll_3Star_Collector",
+      "Archetype": "HYPER_ROLL",
+      "Synergy": "NORMAL",
+      "Avg_Placement": 7.62,
+      "Top4_%": 0.0,
+      "Win_%": 0.0,
+      "Avg_Stage": 18.8,
+      "Avg_2Star": 4.5,
+      "Avg_3Star": 0.0
+    },
+    {
+      "Generation": 2,
+      "Agent": "LoseStreak_Cashout_Pivot",
+      "Archetype": "LOSE_STREAK_CASHOUT",
+      "Synergy": "ARTIFICIAL",
+      "Avg_Placement": 7.38,
+      "Top4_%": 0.0,
+      "Win_%": 0.0,
+      "Avg_Stage": 19.6,
+      "Avg_2Star": 4.25,
+      "Avg_3Star": 0.0
+    },
+    {
+      "Generation": 2,
+      "Agent": "Fire_Blaze_Aggro_Specialist",
+      "Archetype": "TEMPO_WIN_STREAK",
+      "Synergy": "FIRE",
+      "Avg_Placement": 7.5,
+      "Top4_%": 0.0,
+      "Win_%": 0.0,
+      "Avg_Stage": 18.8,
+      "Avg_2Star": 2.0,
+      "Avg_3Star": 0.0
+    },
+    {
+      "Generation": 2,
+      "Agent": "Water_Mana_Control_Specialist",
+      "Archetype": "STANDARD_ECON_50G",
+      "Synergy": "WATER",
+      "Avg_Placement": 7.62,
+      "Top4_%": 0.0,
+      "Win_%": 0.0,
+      "Avg_Stage": 18.6,
+      "Avg_2Star": 1.62,
+      "Avg_3Star": 0.0
+    },
+    {
+      "Generation": 2,
+      "Agent": "Fighting_Steel_Bastion_Specialist",
+      "Archetype": "STANDARD_ECON_50G",
+      "Synergy": "FIGHTING",
+      "Avg_Placement": 6.75,
+      "Top4_%": 12.5,
+      "Win_%": 0.0,
+      "Avg_Stage": 20.9,
+      "Avg_2Star": 3.75,
+      "Avg_3Star": 0.0
+    },
+    {
+      "Generation": 2,
+      "Agent": "Dark_Assassin_Crit_Specialist",
+      "Archetype": "HYPER_ROLL",
+      "Synergy": "DARK",
+      "Avg_Placement": 7.25,
+      "Top4_%": 0.0,
+      "Win_%": 0.0,
+      "Avg_Stage": 19.0,
+      "Avg_2Star": 2.25,
+      "Avg_3Star": 0.0
+    },
+    {
+      "Generation": 3,
+      "Agent": "Econ_50g_Fast8_Compounder",
+      "Archetype": "STANDARD_ECON_50G",
+      "Synergy": "FIGHTING",
+      "Avg_Placement": 7.62,
+      "Top4_%": 0.0,
+      "Win_%": 0.0,
+      "Avg_Stage": 17.8,
+      "Avg_2Star": 1.25,
+      "Avg_3Star": 0.0
+    },
+    {
+      "Generation": 3,
+      "Agent": "Tempo_WinStreak_Snowballer",
+      "Archetype": "TEMPO_WIN_STREAK",
+      "Synergy": "FAIRY",
+      "Avg_Placement": 7.5,
+      "Top4_%": 0.0,
+      "Win_%": 0.0,
+      "Avg_Stage": 19.6,
+      "Avg_2Star": 3.62,
+      "Avg_3Star": 0.0
+    },
+    {
+      "Generation": 3,
+      "Agent": "HyperRoll_3Star_Collector",
+      "Archetype": "HYPER_ROLL",
+      "Synergy": "NORMAL",
+      "Avg_Placement": 6.88,
+      "Top4_%": 0.0,
+      "Win_%": 0.0,
+      "Avg_Stage": 20.9,
+      "Avg_2Star": 5.88,
+      "Avg_3Star": 0.0
+    },
+    {
+      "Generation": 3,
+      "Agent": "LoseStreak_Cashout_Pivot",
+      "Archetype": "LOSE_STREAK_CASHOUT",
+      "Synergy": "ARTIFICIAL",
+      "Avg_Placement": 7.0,
+      "Top4_%": 12.5,
+      "Win_%": 0.0,
+      "Avg_Stage": 20.2,
+      "Avg_2Star": 4.25,
+      "Avg_3Star": 0.0
+    },
+    {
+      "Generation": 3,
+      "Agent": "Fire_Blaze_Aggro_Specialist",
+      "Archetype": "TEMPO_WIN_STREAK",
+      "Synergy": "FIRE",
+      "Avg_Placement": 8.0,
+      "Top4_%": 0.0,
+      "Win_%": 0.0,
+      "Avg_Stage": 18.4,
+      "Avg_2Star": 1.62,
+      "Avg_3Star": 0.0
+    },
+    {
+      "Generation": 3,
+      "Agent": "Water_Mana_Control_Specialist",
+      "Archetype": "STANDARD_ECON_50G",
+      "Synergy": "WATER",
+      "Avg_Placement": 7.12,
+      "Top4_%": 0.0,
+      "Win_%": 0.0,
+      "Avg_Stage": 20.4,
+      "Avg_2Star": 3.12,
+      "Avg_3Star": 0.0
+    },
+    {
+      "Generation": 3,
+      "Agent": "Fighting_Steel_Bastion_Specialist",
+      "Archetype": "STANDARD_ECON_50G",
+      "Synergy": "FIGHTING",
+      "Avg_Placement": 7.12,
+      "Top4_%": 0.0,
+      "Win_%": 0.0,
+      "Avg_Stage": 20.8,
+      "Avg_2Star": 3.25,
+      "Avg_3Star": 0.0
+    },
+    {
+      "Generation": 3,
+      "Agent": "Dark_Assassin_Crit_Specialist",
+      "Archetype": "HYPER_ROLL",
+      "Synergy": "DARK",
+      "Avg_Placement": 7.0,
+      "Top4_%": 0.0,
+      "Win_%": 0.0,
+      "Avg_Stage": 21.1,
+      "Avg_2Star": 3.25,
+      "Avg_3Star": 0.0
+    },
+    {
+      "Generation": 4,
+      "Agent": "Econ_50g_Fast8_Compounder",
+      "Archetype": "STANDARD_ECON_50G",
+      "Synergy": "WILD",
+      "Avg_Placement": 7.38,
+      "Top4_%": 0.0,
+      "Win_%": 0.0,
+      "Avg_Stage": 19.4,
+      "Avg_2Star": 1.88,
+      "Avg_3Star": 0.0
+    },
+    {
+      "Generation": 4,
+      "Agent": "Tempo_WinStreak_Snowballer",
+      "Archetype": "TEMPO_WIN_STREAK",
+      "Synergy": "MONSTER",
+      "Avg_Placement": 7.75,
+      "Top4_%": 0.0,
+      "Win_%": 0.0,
+      "Avg_Stage": 18.8,
+      "Avg_2Star": 3.5,
+      "Avg_3Star": 0.0
+    },
+    {
+      "Generation": 4,
+      "Agent": "HyperRoll_3Star_Collector",
+      "Archetype": "HYPER_ROLL",
+      "Synergy": "NORMAL",
+      "Avg_Placement": 6.88,
+      "Top4_%": 0.0,
+      "Win_%": 0.0,
+      "Avg_Stage": 21.6,
+      "Avg_2Star": 6.88,
+      "Avg_3Star": 0.0
+    },
+    {
+      "Generation": 4,
+      "Agent": "LoseStreak_Cashout_Pivot",
+      "Archetype": "LOSE_STREAK_CASHOUT",
+      "Synergy": "ARTIFICIAL",
+      "Avg_Placement": 7.62,
+      "Top4_%": 0.0,
+      "Win_%": 0.0,
+      "Avg_Stage": 19.0,
+      "Avg_2Star": 3.88,
+      "Avg_3Star": 0.0
+    },
+    {
+      "Generation": 4,
+      "Agent": "Fire_Blaze_Aggro_Specialist",
+      "Archetype": "TEMPO_WIN_STREAK",
+      "Synergy": "FIRE",
+      "Avg_Placement": 7.25,
+      "Top4_%": 0.0,
+      "Win_%": 0.0,
+      "Avg_Stage": 19.8,
+      "Avg_2Star": 2.25,
+      "Avg_3Star": 0.0
+    },
+    {
+      "Generation": 4,
+      "Agent": "Water_Mana_Control_Specialist",
+      "Archetype": "STANDARD_ECON_50G",
+      "Synergy": "WATER",
+      "Avg_Placement": 7.5,
+      "Top4_%": 0.0,
+      "Win_%": 0.0,
+      "Avg_Stage": 19.5,
+      "Avg_2Star": 1.75,
+      "Avg_3Star": 0.0
+    },
+    {
+      "Generation": 4,
+      "Agent": "Fighting_Steel_Bastion_Specialist",
+      "Archetype": "STANDARD_ECON_50G",
+      "Synergy": "FIGHTING",
+      "Avg_Placement": 6.38,
+      "Top4_%": 12.5,
+      "Win_%": 0.0,
+      "Avg_Stage": 21.2,
+      "Avg_2Star": 3.0,
+      "Avg_3Star": 0.0
+    },
+    {
+      "Generation": 4,
+      "Agent": "Dark_Assassin_Crit_Specialist",
+      "Archetype": "HYPER_ROLL",
+      "Synergy": "DARK",
+      "Avg_Placement": 6.38,
+      "Top4_%": 12.5,
+      "Win_%": 0.0,
+      "Avg_Stage": 20.6,
+      "Avg_2Star": 3.0,
+      "Avg_3Star": 0.0
+    }
+  ],
+  "viper_distilled_heuristics": [
+    {
+      "agent_name": "Econ_50g_Fast8_Compounder",
+      "archetype": "STANDARD_ECON_50G",
+      "fidelity_accuracy": 0.6478,
+      "top_features": [
+        [
+          "gold",
+          0.31261611568006364
+        ],
+        [
+          "stage_level",
+          0.30850897524824633
+        ],
+        [
+          "player_hp",
+          0.19461483006333277
+        ],
+        [
+          "shop_pair_matches",
+          0.13168415943192752
+        ],
+        [
+          "free_board_slots",
+          0.03771529191450813
+        ],
+        [
+          "bench_size",
+          0.01486062766192167
+        ]
+      ],
+      "extracted_rules_pt": [
+        "SE (stage_level > 8.50 E player_hp <= 43.50 E shop_pair_matches <= 0.50) ENTÃO [OTIMIZAR_OU_VENDER_BANCO] (confiança=74.1%, n=528)",
+        "SE (stage_level > 8.50 E player_hp > 43.50 E gold > 53.50) ENTÃO [COMPRAR_XP_SUBIR_NIVEL_4G] (confiança=58.3%, n=505)",
+        "SE (stage_level > 8.50 E player_hp > 43.50 E gold <= 53.50) ENTÃO [OTIMIZAR_OU_VENDER_BANCO] (confiança=58.5%, n=444)",
+        "SE (stage_level <= 8.50 E shop_pair_matches <= 0.50 E free_board_slots <= 0.50) ENTÃO [GUARDAR_OURO_ENCERRAR_TURNO] (confiança=65.2%, n=154)",
+        "SE (stage_level > 8.50 E player_hp <= 43.50 E shop_pair_matches > 0.50) ENTÃO [OTIMIZAR_OU_VENDER_BANCO] (confiança=50.3%, n=76)"
+      ],
+      "action_distribution": {
+        "COMPRAR_UNIDADE_SINERGIA_OU_PAR": 0.22277777777777777,
+        "REROLL_LOJA_1G": 0.0,
+        "COMPRAR_XP_SUBIR_NIVEL_4G": 0.2411111111111111,
+        "OTIMIZAR_OU_VENDER_BANCO": 0.4166666666666667,
+        "GUARDAR_OURO_ENCERRAR_TURNO": 0.11944444444444445
+      },
+      "tree_text": "|--- stage_level <= 8.50\n|   |--- shop_pair_matches <= 0.50\n|   |   |--- free_board_slots <= 0.50\n|   |   |   |--- class: GUARDAR_OURO_ENCERRAR_TURNO\n|   |   |--- free_board_slots >  0.50\n|   |   |   |--- class: COMPRAR_UNIDADE_SINERGIA_OU_PAR\n|   |--- shop_pair_matches >  0.50\n|   |   |--- bench_size <= 5.50\n|   |   |   |--- class: COMPRAR_UNIDADE_SINERGIA_OU_PAR\n|   |   |--- bench_size >  5.50\n|   |   |   |--- class: COMPRAR_UNIDADE_SINERGIA_OU_PAR\n|--- stage_level >  8.50\n|   |--- player_hp <= 43.50\n|   |   |--- shop_pair_matches <= 0.50\n|   |   |   |--- class: OTIMIZAR_OU_VENDER_BANCO\n|   |   |--- shop_pair_matches >  0.50\n|   |   |   |--- class: OTIMIZAR_OU_VENDER_BANCO\n|   |--- player_hp >  43.50\n|   |   |--- gold <= 53.50\n|   |   |   |--- class: OTIMIZAR_OU_VENDER_BANCO\n|   |   |--- gold >  53.50\n|   |   |   |--- class: COMPRAR_XP_SUBIR_NIVEL_4G\n"
+    },
+    {
+      "agent_name": "Tempo_WinStreak_Snowballer",
+      "archetype": "TEMPO_WIN_STREAK",
+      "fidelity_accuracy": 0.7992,
+      "top_features": [
+        [
+          "player_hp",
+          0.5794127469300343
+        ],
+        [
+          "bench_size",
+          0.32652390772248785
+        ],
+        [
+          "gold",
+          0.09406334534747783
+        ],
+        [
+          "stage_level",
+          0.0
+        ],
+        [
+          "interest_tier",
+          0.0
+        ],
+        [
+          "player_level",
+          0.0
+        ]
+      ],
+      "extracted_rules_pt": [
+        "SE (player_hp <= 63.50 E bench_size > 5.50 E player_hp <= 41.50) ENTÃO [OTIMIZAR_OU_VENDER_BANCO] (confiança=99.0%, n=494)",
+        "SE (player_hp <= 63.50 E bench_size > 5.50 E player_hp > 41.50) ENTÃO [OTIMIZAR_OU_VENDER_BANCO] (confiança=87.9%, n=400)",
+        "SE (player_hp > 63.50 E bench_size > 5.50 E gold > 13.50) ENTÃO [COMPRAR_XP_SUBIR_NIVEL_4G] (confiança=50.5%, n=374)",
+        "SE (player_hp > 63.50 E bench_size <= 5.50 E gold > 5.50) ENTÃO [COMPRAR_UNIDADE_SINERGIA_OU_PAR] (confiança=96.8%, n=235)",
+        "SE (player_hp > 63.50 E bench_size > 5.50 E gold <= 13.50) ENTÃO [GUARDAR_OURO_ENCERRAR_TURNO] (confiança=44.4%, n=203)"
+      ],
+      "action_distribution": {
+        "COMPRAR_UNIDADE_SINERGIA_OU_PAR": 0.18166479190101237,
+        "REROLL_LOJA_1G": 0.008998875140607425,
+        "COMPRAR_XP_SUBIR_NIVEL_4G": 0.14341957255343082,
+        "OTIMIZAR_OU_VENDER_BANCO": 0.5674915635545557,
+        "GUARDAR_OURO_ENCERRAR_TURNO": 0.0984251968503937
+      },
+      "tree_text": "|--- player_hp <= 63.50\n|   |--- bench_size <= 5.50\n|   |   |--- class: COMPRAR_UNIDADE_SINERGIA_OU_PAR\n|   |--- bench_size >  5.50\n|   |   |--- player_hp <= 41.50\n|   |   |   |--- class: OTIMIZAR_OU_VENDER_BANCO\n|   |   |--- player_hp >  41.50\n|   |   |   |--- class: OTIMIZAR_OU_VENDER_BANCO\n|--- player_hp >  63.50\n|   |--- bench_size <= 5.50\n|   |   |--- gold <= 5.50\n|   |   |   |--- class: COMPRAR_UNIDADE_SINERGIA_OU_PAR\n|   |   |--- gold >  5.50\n|   |   |   |--- class: COMPRAR_UNIDADE_SINERGIA_OU_PAR\n|   |--- bench_size >  5.50\n|   |   |--- gold <= 13.50\n|   |   |   |--- class: GUARDAR_OURO_ENCERRAR_TURNO\n|   |   |--- gold >  13.50\n|   |   |   |--- class: COMPRAR_XP_SUBIR_NIVEL_4G\n"
+    },
+    {
+      "agent_name": "HyperRoll_3Star_Collector",
+      "archetype": "HYPER_ROLL",
+      "fidelity_accuracy": 0.7967,
+      "top_features": [
+        [
+          "bench_size",
+          0.43290934655635666
+        ],
+        [
+          "gold",
+          0.3728139428138098
+        ],
+        [
+          "player_hp",
+          0.15640567788924067
+        ],
+        [
+          "shop_synergy_matches",
+          0.02282867726329475
+        ],
+        [
+          "num_2star_units",
+          0.015042355477298094
+        ],
+        [
+          "stage_level",
+          0.0
+        ]
+      ],
+      "extracted_rules_pt": [
+        "SE (bench_size > 5.50 E gold > 11.50 E player_hp > 60.50) ENTÃO [REROLL_LOJA_1G] (confiança=81.9%, n=1047)",
+        "SE (bench_size > 5.50 E gold <= 11.50 E num_2star_units > 1.50) ENTÃO [OTIMIZAR_OU_VENDER_BANCO] (confiança=78.7%, n=756)",
+        "SE (bench_size <= 5.50 E player_hp > 53.50 E gold > 0.50) ENTÃO [COMPRAR_UNIDADE_SINERGIA_OU_PAR] (confiança=97.3%, n=386)",
+        "SE (bench_size > 5.50 E gold <= 11.50 E num_2star_units <= 1.50) ENTÃO [OTIMIZAR_OU_VENDER_BANCO] (confiança=59.4%, n=384)",
+        "SE (bench_size <= 5.50 E player_hp <= 53.50 E shop_synergy_matches <= 3.50) ENTÃO [OTIMIZAR_OU_VENDER_BANCO] (confiança=35.8%, n=238)"
+      ],
+      "action_distribution": {
+        "COMPRAR_UNIDADE_SINERGIA_OU_PAR": 0.1875601154216095,
+        "REROLL_LOJA_1G": 0.3526771401090093,
+        "COMPRAR_XP_SUBIR_NIVEL_4G": 0.03270278935556268,
+        "OTIMIZAR_OU_VENDER_BANCO": 0.3767233087528054,
+        "GUARDAR_OURO_ENCERRAR_TURNO": 0.05033664636101314
+      },
+      "tree_text": "|--- bench_size <= 5.50\n|   |--- player_hp <= 53.50\n|   |   |--- shop_synergy_matches <= 3.50\n|   |   |   |--- class: OTIMIZAR_OU_VENDER_BANCO\n|   |   |--- shop_synergy_matches >  3.50\n|   |   |   |--- class: COMPRAR_UNIDADE_SINERGIA_OU_PAR\n|   |--- player_hp >  53.50\n|   |   |--- gold <= 0.50\n|   |   |   |--- class: OTIMIZAR_OU_VENDER_BANCO\n|   |   |--- gold >  0.50\n|   |   |   |--- class: COMPRAR_UNIDADE_SINERGIA_OU_PAR\n|--- bench_size >  5.50\n|   |--- gold <= 11.50\n|   |   |--- num_2star_units <= 1.50\n|   |   |   |--- class: OTIMIZAR_OU_VENDER_BANCO\n|   |   |--- num_2star_units >  1.50\n|   |   |   |--- class: OTIMIZAR_OU_VENDER_BANCO\n|   |--- gold >  11.50\n|   |   |--- player_hp <= 60.50\n|   |   |   |--- class: OTIMIZAR_OU_VENDER_BANCO\n|   |   |--- player_hp >  60.50\n|   |   |   |--- class: REROLL_LOJA_1G\n"
+    },
+    {
+      "agent_name": "LoseStreak_Cashout_Pivot",
+      "archetype": "LOSE_STREAK_CASHOUT",
+      "fidelity_accuracy": 0.6516,
+      "top_features": [
+        [
+          "bench_size",
+          0.48190174477630426
+        ],
+        [
+          "player_hp",
+          0.31270330545246666
+        ],
+        [
+          "shop_pair_matches",
+          0.09092113083661074
+        ],
+        [
+          "shop_synergy_matches",
+          0.06093300595605904
+        ],
+        [
+          "gold",
+          0.05354081297855921
+        ],
+        [
+          "stage_level",
+          0.0
+        ]
+      ],
+      "extracted_rules_pt": [
+        "SE (bench_size > 5.50 E player_hp > 29.00 E player_hp <= 64.50) ENTÃO [OTIMIZAR_OU_VENDER_BANCO] (confiança=70.5%, n=481)",
+        "SE (bench_size > 5.50 E player_hp <= 29.00 E shop_synergy_matches > 3.50) ENTÃO [REROLL_LOJA_1G] (confiança=58.0%, n=281)",
+        "SE (bench_size > 5.50 E player_hp > 29.00 E player_hp > 64.50) ENTÃO [COMPRAR_XP_SUBIR_NIVEL_4G] (confiança=28.3%, n=250)",
+        "SE (bench_size <= 5.50 E shop_pair_matches <= 0.50 E gold <= 49.50) ENTÃO [GUARDAR_OURO_ENCERRAR_TURNO] (confiança=50.5%, n=166)",
+        "SE (bench_size > 5.50 E player_hp <= 29.00 E shop_synergy_matches <= 3.50) ENTÃO [OTIMIZAR_OU_VENDER_BANCO] (confiança=67.9%, n=128)"
+      ],
+      "action_distribution": {
+        "COMPRAR_UNIDADE_SINERGIA_OU_PAR": 0.20261437908496732,
+        "REROLL_LOJA_1G": 0.16732026143790849,
+        "COMPRAR_XP_SUBIR_NIVEL_4G": 0.1300653594771242,
+        "OTIMIZAR_OU_VENDER_BANCO": 0.37973856209150325,
+        "GUARDAR_OURO_ENCERRAR_TURNO": 0.12026143790849673
+      },
+      "tree_text": "|--- bench_size <= 5.50\n|   |--- shop_pair_matches <= 0.50\n|   |   |--- gold <= 49.50\n|   |   |   |--- class: GUARDAR_OURO_ENCERRAR_TURNO\n|   |   |--- gold >  49.50\n|   |   |   |--- class: COMPRAR_UNIDADE_SINERGIA_OU_PAR\n|   |--- shop_pair_matches >  0.50\n|   |   |--- class: COMPRAR_UNIDADE_SINERGIA_OU_PAR\n|--- bench_size >  5.50\n|   |--- player_hp <= 29.00\n|   |   |--- shop_synergy_matches <= 3.50\n|   |   |   |--- class: OTIMIZAR_OU_VENDER_BANCO\n|   |   |--- shop_synergy_matches >  3.50\n|   |   |   |--- class: REROLL_LOJA_1G\n|   |--- player_hp >  29.00\n|   |   |--- player_hp <= 64.50\n|   |   |   |--- class: OTIMIZAR_OU_VENDER_BANCO\n|   |   |--- player_hp >  64.50\n|   |   |   |--- class: COMPRAR_XP_SUBIR_NIVEL_4G\n"
+    },
+    {
+      "agent_name": "Fire_Blaze_Aggro_Specialist",
+      "archetype": "TEMPO_WIN_STREAK",
+      "fidelity_accuracy": 0.7466,
+      "top_features": [
+        [
+          "bench_size",
+          0.4817747978454724
+        ],
+        [
+          "player_hp",
+          0.29334225914545553
+        ],
+        [
+          "gold",
+          0.12462582334055493
+        ],
+        [
+          "shop_synergy_matches",
+          0.10025711966851711
+        ],
+        [
+          "stage_level",
+          0.0
+        ],
+        [
+          "interest_tier",
+          0.0
+        ]
+      ],
+      "extracted_rules_pt": [
+        "SE (bench_size > 5.50 E player_hp <= 67.00 E shop_synergy_matches <= 3.50) ENTÃO [OTIMIZAR_OU_VENDER_BANCO] (confiança=90.7%, n=388)",
+        "SE (bench_size > 5.50 E player_hp > 67.00 E gold > 13.50) ENTÃO [COMPRAR_XP_SUBIR_NIVEL_4G] (confiança=54.1%, n=383)",
+        "SE (bench_size > 5.50 E player_hp > 67.00 E gold <= 13.50) ENTÃO [OTIMIZAR_OU_VENDER_BANCO] (confiança=58.7%, n=337)",
+        "SE (bench_size <= 5.50 E player_hp <= 62.50 E shop_synergy_matches <= 4.50) ENTÃO [OTIMIZAR_OU_VENDER_BANCO] (confiança=59.5%, n=331)",
+        "SE (bench_size <= 5.50 E player_hp > 62.50 E gold > 2.50) ENTÃO [COMPRAR_UNIDADE_SINERGIA_OU_PAR] (confiança=94.6%, n=295)"
+      ],
+      "action_distribution": {
+        "COMPRAR_UNIDADE_SINERGIA_OU_PAR": 0.2225594334850784,
+        "REROLL_LOJA_1G": 0.0025290844714213456,
+        "COMPRAR_XP_SUBIR_NIVEL_4G": 0.15022761760242792,
+        "OTIMIZAR_OU_VENDER_BANCO": 0.5295902883156297,
+        "GUARDAR_OURO_ENCERRAR_TURNO": 0.09509357612544259
+      },
+      "tree_text": "|--- bench_size <= 5.50\n|   |--- player_hp <= 62.50\n|   |   |--- shop_synergy_matches <= 4.50\n|   |   |   |--- class: OTIMIZAR_OU_VENDER_BANCO\n|   |   |--- shop_synergy_matches >  4.50\n|   |   |   |--- class: COMPRAR_UNIDADE_SINERGIA_OU_PAR\n|   |--- player_hp >  62.50\n|   |   |--- gold <= 2.50\n|   |   |   |--- class: GUARDAR_OURO_ENCERRAR_TURNO\n|   |   |--- gold >  2.50\n|   |   |   |--- class: COMPRAR_UNIDADE_SINERGIA_OU_PAR\n|--- bench_size >  5.50\n|   |--- player_hp <= 67.00\n|   |   |--- shop_synergy_matches <= 3.50\n|   |   |   |--- class: OTIMIZAR_OU_VENDER_BANCO\n|   |   |--- shop_synergy_matches >  3.50\n|   |   |   |--- class: OTIMIZAR_OU_VENDER_BANCO\n|   |--- player_hp >  67.00\n|   |   |--- gold <= 13.50\n|   |   |   |--- class: OTIMIZAR_OU_VENDER_BANCO\n|   |   |--- gold >  13.50\n|   |   |   |--- class: COMPRAR_XP_SUBIR_NIVEL_4G\n"
+    },
+    {
+      "agent_name": "Water_Mana_Control_Specialist",
+      "archetype": "STANDARD_ECON_50G",
+      "fidelity_accuracy": 0.8036,
+      "top_features": [
+        [
+          "bench_size",
+          0.6267303815646718
+        ],
+        [
+          "shop_synergy_matches",
+          0.1365048502930829
+        ],
+        [
+          "free_board_slots",
+          0.08285010686431402
+        ],
+        [
+          "gold",
+          0.08043871039293903
+        ],
+        [
+          "lose_streak",
+          0.07347595088499229
+        ],
+        [
+          "stage_level",
+          0.0
+        ]
+      ],
+      "extracted_rules_pt": [
+        "SE (bench_size > 5.50 E free_board_slots <= 0.50 E gold <= 53.50) ENTÃO [OTIMIZAR_OU_VENDER_BANCO] (confiança=79.8%, n=2078)",
+        "SE (bench_size <= 5.50 E shop_synergy_matches > 2.50 E gold > 0.50) ENTÃO [COMPRAR_UNIDADE_SINERGIA_OU_PAR] (confiança=93.2%, n=488)",
+        "SE (bench_size <= 5.50 E shop_synergy_matches <= 2.50 E lose_streak > 0.50) ENTÃO [OTIMIZAR_OU_VENDER_BANCO] (confiança=51.0%, n=412)",
+        "SE (bench_size <= 5.50 E shop_synergy_matches <= 2.50 E lose_streak <= 0.50) ENTÃO [COMPRAR_UNIDADE_SINERGIA_OU_PAR] (confiança=83.9%, n=148)",
+        "SE (bench_size > 5.50 E free_board_slots <= 0.50 E gold > 53.50) ENTÃO [COMPRAR_XP_SUBIR_NIVEL_4G] (confiança=66.6%, n=81)"
+      ],
+      "action_distribution": {
+        "COMPRAR_UNIDADE_SINERGIA_OU_PAR": 0.20745992601726265,
+        "REROLL_LOJA_1G": 0.004932182490752158,
+        "COMPRAR_XP_SUBIR_NIVEL_4G": 0.13008631319358815,
+        "OTIMIZAR_OU_VENDER_BANCO": 0.6405672009864365,
+        "GUARDAR_OURO_ENCERRAR_TURNO": 0.016954377311960544
+      },
+      "tree_text": "|--- bench_size <= 5.50\n|   |--- shop_synergy_matches <= 2.50\n|   |   |--- lose_streak <= 0.50\n|   |   |   |--- class: COMPRAR_UNIDADE_SINERGIA_OU_PAR\n|   |   |--- lose_streak >  0.50\n|   |   |   |--- class: OTIMIZAR_OU_VENDER_BANCO\n|   |--- shop_synergy_matches >  2.50\n|   |   |--- gold <= 0.50\n|   |   |   |--- class: OTIMIZAR_OU_VENDER_BANCO\n|   |   |--- gold >  0.50\n|   |   |   |--- class: COMPRAR_UNIDADE_SINERGIA_OU_PAR\n|--- bench_size >  5.50\n|   |--- free_board_slots <= 0.50\n|   |   |--- gold <= 53.50\n|   |   |   |--- class: OTIMIZAR_OU_VENDER_BANCO\n|   |   |--- gold >  53.50\n|   |   |   |--- class: COMPRAR_XP_SUBIR_NIVEL_4G\n|   |--- free_board_slots >  0.50\n|   |   |--- class: COMPRAR_UNIDADE_SINERGIA_OU_PAR\n"
+    },
+    {
+      "agent_name": "Fighting_Steel_Bastion_Specialist",
+      "archetype": "STANDARD_ECON_50G",
+      "fidelity_accuracy": 0.7878,
+      "top_features": [
+        [
+          "bench_size",
+          0.6149096152933137
+        ],
+        [
+          "gold",
+          0.19302722837781144
+        ],
+        [
+          "board_size",
+          0.1613943823650886
+        ],
+        [
+          "shop_synergy_matches",
+          0.017078197716139273
+        ],
+        [
+          "xp_to_next_level",
+          0.013590576247647045
+        ],
+        [
+          "stage_level",
+          0.0
+        ]
+      ],
+      "extracted_rules_pt": [
+        "SE (bench_size > 5.50 E board_size > 6.50 E gold > 3.50) ENTÃO [OTIMIZAR_OU_VENDER_BANCO] (confiança=74.1%, n=953)",
+        "SE (bench_size > 5.50 E board_size > 6.50 E gold <= 3.50) ENTÃO [OTIMIZAR_OU_VENDER_BANCO] (confiança=94.5%, n=441)",
+        "SE (bench_size <= 5.50 E gold > 1.50 E shop_synergy_matches > 1.50) ENTÃO [COMPRAR_UNIDADE_SINERGIA_OU_PAR] (confiança=96.5%, n=307)",
+        "SE (bench_size > 5.50 E board_size <= 6.50 E gold > 3.50) ENTÃO [COMPRAR_XP_SUBIR_NIVEL_4G] (confiança=55.1%, n=270)",
+        "SE (bench_size > 5.50 E board_size <= 6.50 E gold <= 3.50) ENTÃO [OTIMIZAR_OU_VENDER_BANCO] (confiança=61.2%, n=205)"
+      ],
+      "action_distribution": {
+        "COMPRAR_UNIDADE_SINERGIA_OU_PAR": 0.16212653778558875,
+        "REROLL_LOJA_1G": 0.011423550087873463,
+        "COMPRAR_XP_SUBIR_NIVEL_4G": 0.15992970123022848,
+        "OTIMIZAR_OU_VENDER_BANCO": 0.5979789103690686,
+        "GUARDAR_OURO_ENCERRAR_TURNO": 0.06854130052724078
+      },
+      "tree_text": "|--- bench_size <= 5.50\n|   |--- gold <= 1.50\n|   |   |--- xp_to_next_level <= 9.00\n|   |   |   |--- class: GUARDAR_OURO_ENCERRAR_TURNO\n|   |   |--- xp_to_next_level >  9.00\n|   |   |   |--- class: OTIMIZAR_OU_VENDER_BANCO\n|   |--- gold >  1.50\n|   |   |--- shop_synergy_matches <= 1.50\n|   |   |   |--- class: COMPRAR_UNIDADE_SINERGIA_OU_PAR\n|   |   |--- shop_synergy_matches >  1.50\n|   |   |   |--- class: COMPRAR_UNIDADE_SINERGIA_OU_PAR\n|--- bench_size >  5.50\n|   |--- board_size <= 6.50\n|   |   |--- gold <= 3.50\n|   |   |   |--- class: OTIMIZAR_OU_VENDER_BANCO\n|   |   |--- gold >  3.50\n|   |   |   |--- class: COMPRAR_XP_SUBIR_NIVEL_4G\n|   |--- board_size >  6.50\n|   |   |--- gold <= 3.50\n|   |   |   |--- class: OTIMIZAR_OU_VENDER_BANCO\n|   |   |--- gold >  3.50\n|   |   |   |--- class: OTIMIZAR_OU_VENDER_BANCO\n"
+    },
+    {
+      "agent_name": "Dark_Assassin_Crit_Specialist",
+      "archetype": "HYPER_ROLL",
+      "fidelity_accuracy": 0.8663,
+      "top_features": [
+        [
+          "bench_size",
+          0.5816264878821263
+        ],
+        [
+          "relative_board_power",
+          0.16393641574554518
+        ],
+        [
+          "gold",
+          0.15219068425584484
+        ],
+        [
+          "win_streak",
+          0.06225725804420851
+        ],
+        [
+          "shop_synergy_matches",
+          0.039989154072275185
+        ],
+        [
+          "stage_level",
+          0.0
+        ]
+      ],
+      "extracted_rules_pt": [
+        "SE (bench_size > 5.50 E relative_board_power <= 1.96 E win_streak <= 4.50) ENTÃO [OTIMIZAR_OU_VENDER_BANCO] (confiança=86.3%, n=2284)",
+        "SE (bench_size > 5.50 E relative_board_power > 1.96 E gold > 51.50) ENTÃO [REROLL_LOJA_1G] (confiança=65.4%, n=264)",
+        "SE (bench_size <= 5.50 E gold > 0.50 E shop_synergy_matches > 0.50) ENTÃO [COMPRAR_UNIDADE_SINERGIA_OU_PAR] (confiança=99.8%, n=203)",
+        "SE (bench_size > 5.50 E relative_board_power > 1.96 E gold <= 51.50) ENTÃO [OTIMIZAR_OU_VENDER_BANCO] (confiança=82.8%, n=172)",
+        "SE (bench_size > 5.50 E relative_board_power <= 1.96 E win_streak > 4.50) ENTÃO [REROLL_LOJA_1G] (confiança=64.6%, n=83)"
+      ],
+      "action_distribution": {
+        "COMPRAR_UNIDADE_SINERGIA_OU_PAR": 0.0837898807605543,
+        "REROLL_LOJA_1G": 0.11891717692555591,
+        "COMPRAR_XP_SUBIR_NIVEL_4G": 0.03544956493715759,
+        "OTIMIZAR_OU_VENDER_BANCO": 0.750563970351273,
+        "GUARDAR_OURO_ENCERRAR_TURNO": 0.011279407025459234
+      },
+      "tree_text": "|--- bench_size <= 5.50\n|   |--- gold <= 0.50\n|   |   |--- shop_synergy_matches <= 0.50\n|   |   |   |--- class: OTIMIZAR_OU_VENDER_BANCO\n|   |   |--- shop_synergy_matches >  0.50\n|   |   |   |--- class: GUARDAR_OURO_ENCERRAR_TURNO\n|   |--- gold >  0.50\n|   |   |--- shop_synergy_matches <= 0.50\n|   |   |   |--- class: COMPRAR_UNIDADE_SINERGIA_OU_PAR\n|   |   |--- shop_synergy_matches >  0.50\n|   |   |   |--- class: COMPRAR_UNIDADE_SINERGIA_OU_PAR\n|--- bench_size >  5.50\n|   |--- relative_board_power <= 1.96\n|   |   |--- win_streak <= 4.50\n|   |   |   |--- class: OTIMIZAR_OU_VENDER_BANCO\n|   |   |--- win_streak >  4.50\n|   |   |   |--- class: REROLL_LOJA_1G\n|   |--- relative_board_power >  1.96\n|   |   |--- gold <= 51.50\n|   |   |   |--- class: OTIMIZAR_OU_VENDER_BANCO\n|   |   |--- gold >  51.50\n|   |   |   |--- class: REROLL_LOJA_1G\n"
+    }
+  ],
+  "composition_damage_tank_records": [
+    {
+      "Synergy": "MONSTER",
+      "Best_Carry_DPS": "MEWTWO(3*)",
+      "Max_Dmg_Record": 1794.6,
+      "Avg_Dmg_Carry": 657.0,
+      "Secondary_Carry": "GARCHOMP(3*) (max 1249)",
+      "Best_Frontline_Tank": "TORTERRA(3*)",
+      "Max_Tank_Record": 2109.9,
+      "Avg_Tank_Absorbed": 1165.5,
+      "Secondary_Tank": "PRIMAL_GROUDON(4*) (max 1906)"
+    },
+    {
+      "Synergy": "ARTIFICIAL",
+      "Best_Carry_DPS": "MEWTWO(3*)",
+      "Max_Dmg_Record": 1794.6,
+      "Avg_Dmg_Carry": 663.7,
+      "Secondary_Carry": "IRON_VALIANT(3*) (max 1186)",
+      "Best_Frontline_Tank": "SILVALLY(3*)",
+      "Max_Tank_Record": 1579.4,
+      "Avg_Tank_Absorbed": 750.2,
+      "Secondary_Tank": "IRON_VALIANT(3*) (max 1638)"
+    },
+    {
+      "Synergy": "PSYCHIC",
+      "Best_Carry_DPS": "MEWTWO(3*)",
+      "Max_Dmg_Record": 1763.3,
+      "Avg_Dmg_Carry": 701.0,
+      "Secondary_Carry": "MEW(3*) (max 1368)",
+      "Best_Frontline_Tank": "SOLGALEO(3*)",
+      "Max_Tank_Record": 1262.6,
+      "Avg_Tank_Absorbed": 977.6,
+      "Secondary_Tank": "GALLADE(3*) (max 1504)"
+    },
+    {
+      "Synergy": "AMORPHOUS",
+      "Best_Carry_DPS": "MEW(3*)",
+      "Max_Dmg_Record": 1367.8,
+      "Avg_Dmg_Carry": 697.7,
+      "Secondary_Carry": "NIHILEGO(3*) (max 1115)",
+      "Best_Frontline_Tank": "MELMETAL(3*)",
+      "Max_Tank_Record": 1281.5,
+      "Avg_Tank_Absorbed": 886.6,
+      "Secondary_Tank": "EELEKTROSS(3*) (max 987)"
+    },
+    {
+      "Synergy": "SOUND",
+      "Best_Carry_DPS": "MELOETTA(3*)",
+      "Max_Dmg_Record": 1336.5,
+      "Avg_Dmg_Carry": 532.5,
+      "Secondary_Carry": "PIROUETTE_MELOETTA(3*) (max 1043)",
+      "Best_Frontline_Tank": "MARACTUS(3*)",
+      "Max_Tank_Record": 1655.4,
+      "Avg_Tank_Absorbed": 869.4,
+      "Secondary_Tank": "PIROUETTE_MELOETTA(3*) (max 1313)"
+    },
+    {
+      "Synergy": "NORMAL",
+      "Best_Carry_DPS": "MELOETTA(3*)",
+      "Max_Dmg_Record": 1336.5,
+      "Avg_Dmg_Carry": 527.4,
+      "Secondary_Carry": "PIROUETTE_MELOETTA(3*) (max 1043)",
+      "Best_Frontline_Tank": "REGIGIGAS(3*)",
+      "Max_Tank_Record": 1584.1,
+      "Avg_Tank_Absorbed": 794.2,
+      "Secondary_Tank": "CHANSEY(2*) (max 1532)"
+    },
+    {
+      "Synergy": "AQUATIC",
+      "Best_Carry_DPS": "KELDEO(3*)",
+      "Max_Dmg_Record": 1309.1,
+      "Avg_Dmg_Carry": 429.8,
+      "Secondary_Carry": "SHADOW_LUGIA(3*) (max 1195)",
+      "Best_Frontline_Tank": "WALREIN(3*)",
+      "Max_Tank_Record": 1303.6,
+      "Avg_Tank_Absorbed": 765.1,
+      "Secondary_Tank": "LUGIA(3*) (max 1120)"
+    },
+    {
+      "Synergy": "ICE",
+      "Best_Carry_DPS": "KYUREM(3*)",
+      "Max_Dmg_Record": 1261.6,
+      "Avg_Dmg_Carry": 520.6,
+      "Secondary_Carry": "TORNADUS(3*) (max 1026)",
+      "Best_Frontline_Tank": "REGICE(3*)",
+      "Max_Tank_Record": 1463.7,
+      "Avg_Tank_Absorbed": 940.1,
+      "Secondary_Tank": "ABOMASNOW(2*) (max 1675)"
+    },
+    {
+      "Synergy": "POISON",
+      "Best_Carry_DPS": "PECHARUNT(3*)",
+      "Max_Dmg_Record": 1254.1,
+      "Avg_Dmg_Carry": 661.5,
+      "Secondary_Carry": "NIHILEGO(3*) (max 1134)",
+      "Best_Frontline_Tank": "VENUSAUR(3*)",
+      "Max_Tank_Record": 1460.6,
+      "Avg_Tank_Absorbed": 608.2,
+      "Secondary_Tank": "GLIMMORA(2*) (max 1484)"
+    },
+    {
+      "Synergy": "GOURMET",
+      "Best_Carry_DPS": "PECHARUNT(3*)",
+      "Max_Dmg_Record": 1254.1,
+      "Avg_Dmg_Carry": 548.7,
+      "Secondary_Carry": "HYDRAPPLE(4*) (max 1186)",
+      "Best_Frontline_Tank": "PECHARUNT(3*)",
+      "Max_Tank_Record": 2247.9,
+      "Avg_Tank_Absorbed": 515.6,
+      "Secondary_Tank": "CHANSEY(2*) (max 1532)"
+    },
+    {
+      "Synergy": "GHOST",
+      "Best_Carry_DPS": "PECHARUNT(3*)",
+      "Max_Dmg_Record": 1254.1,
+      "Avg_Dmg_Carry": 540.2,
+      "Secondary_Carry": "ORIGIN_GIRATINA(3*) (max 871)",
+      "Best_Frontline_Tank": "PECHARUNT(3*)",
+      "Max_Tank_Record": 2247.9,
+      "Avg_Tank_Absorbed": 505.2,
+      "Secondary_Tank": "SPECTRIER(3*) (max 1441)"
+    },
+    {
+      "Synergy": "DRAGON",
+      "Best_Carry_DPS": "GARCHOMP(3*)",
+      "Max_Dmg_Record": 1249.0,
+      "Avg_Dmg_Carry": 581.8,
+      "Secondary_Carry": "MEGA_RAYQUAZA(4*) (max 1201)",
+      "Best_Frontline_Tank": "REGIDRAGO(3*)",
+      "Max_Tank_Record": 1541.3,
+      "Avg_Tank_Absorbed": 1051.0,
+      "Secondary_Tank": "DIALGA(3*) (max 1459)"
+    },
+    {
+      "Synergy": "HUMAN",
+      "Best_Carry_DPS": "GALLADE(3*)",
+      "Max_Dmg_Record": 1247.2,
+      "Avg_Dmg_Carry": 530.8,
+      "Secondary_Carry": "INFERNAPE(3*) (max 1124)",
+      "Best_Frontline_Tank": "LILIGANT(2*)",
+      "Max_Tank_Record": 1675.0,
+      "Avg_Tank_Absorbed": 598.6,
+      "Secondary_Tank": "REGIROCK(3*) (max 1347)"
+    },
+    {
+      "Synergy": "FIGHTING",
+      "Best_Carry_DPS": "GALLADE(3*)",
+      "Max_Dmg_Record": 1247.2,
+      "Avg_Dmg_Carry": 530.8,
+      "Secondary_Carry": "KELDEO(3*) (max 1309)",
+      "Best_Frontline_Tank": "IRON_VALIANT(3*)",
+      "Max_Tank_Record": 2608.9,
+      "Avg_Tank_Absorbed": 697.6,
+      "Secondary_Tank": "BRELOOM(2*) (max 2099)"
+    },
+    {
+      "Synergy": "ELECTRIC",
+      "Best_Carry_DPS": "THUNDURUS(3*)",
+      "Max_Dmg_Record": 1220.9,
+      "Avg_Dmg_Carry": 721.3,
+      "Secondary_Carry": "ZEKROM(3*) (max 1038)",
+      "Best_Frontline_Tank": "ZAPDOS(3*)",
+      "Max_Tank_Record": 1077.8,
+      "Avg_Tank_Absorbed": 520.7,
+      "Secondary_Tank": "IRON_HANDS(3*) (max 1018)"
+    },
+    {
+      "Synergy": "FLYING",
+      "Best_Carry_DPS": "MEGA_RAYQUAZA(4*)",
+      "Max_Dmg_Record": 1200.7,
+      "Avg_Dmg_Carry": 595.8,
+      "Secondary_Carry": "HO_OH(3*) (max 1166)",
+      "Best_Frontline_Tank": "SHAYMIN_SKY(4*)",
+      "Max_Tank_Record": 1843.3,
+      "Avg_Tank_Absorbed": 580.3,
+      "Secondary_Tank": "BEAUTIFLY(3*) (max 1251)"
+    },
+    {
+      "Synergy": "DARK",
+      "Best_Carry_DPS": "SHADOW_LUGIA(3*)",
+      "Max_Dmg_Record": 1195.4,
+      "Avg_Dmg_Carry": 472.2,
+      "Secondary_Carry": "HYDREIGON(3*) (max 990)",
+      "Best_Frontline_Tank": "GUZZLORD(3*)",
+      "Max_Tank_Record": 2211.6,
+      "Avg_Tank_Absorbed": 684.2,
+      "Secondary_Tank": "KROOKODILE(3*) (max 1265)"
+    },
+    {
+      "Synergy": "FIRE",
+      "Best_Carry_DPS": "HO_OH(3*)",
+      "Max_Dmg_Record": 1166.1,
+      "Avg_Dmg_Carry": 468.5,
+      "Secondary_Carry": "RESHIRAM(3*) (max 983)",
+      "Best_Frontline_Tank": "PRIMAL_GROUDON(4*)",
+      "Max_Tank_Record": 1469.5,
+      "Avg_Tank_Absorbed": 1049.8,
+      "Secondary_Tank": "INFERNAPE(3*) (max 1489)"
+    },
+    {
+      "Synergy": "FAIRY",
+      "Best_Carry_DPS": "TINKATON(3*)",
+      "Max_Dmg_Record": 1161.2,
+      "Avg_Dmg_Carry": 574.0,
+      "Secondary_Carry": "IRON_VALIANT(3*) (max 1186)",
+      "Best_Frontline_Tank": "IRON_VALIANT(3*)",
+      "Max_Tank_Record": 2608.9,
+      "Avg_Tank_Absorbed": 823.6,
+      "Secondary_Tank": "CHANSEY(2*) (max 1532)"
+    },
+    {
+      "Synergy": "STEEL",
+      "Best_Carry_DPS": "TINKATON(3*)",
+      "Max_Dmg_Record": 1161.2,
+      "Avg_Dmg_Carry": 574.0,
+      "Secondary_Carry": "AEGISLASH(3*) (max 977)",
+      "Best_Frontline_Tank": "STAKATAKA(3*)",
+      "Max_Tank_Record": 1883.8,
+      "Avg_Tank_Absorbed": 1072.7,
+      "Secondary_Tank": "DIALGA(3*) (max 1459)"
+    },
+    {
+      "Synergy": "ROCK",
+      "Best_Carry_DPS": "NIHILEGO(3*)",
+      "Max_Dmg_Record": 1115.5,
+      "Avg_Dmg_Carry": 465.0,
+      "Secondary_Carry": "SUDOWOODO(2*) (max 1124)",
+      "Best_Frontline_Tank": "STAKATAKA(3*)",
+      "Max_Tank_Record": 1883.8,
+      "Avg_Tank_Absorbed": 1118.3,
+      "Secondary_Tank": "SUDOWOODO(2*) (max 1768)"
+    },
+    {
+      "Synergy": "LIGHT",
+      "Best_Carry_DPS": "ULTRA_NECROZMA(4*)",
+      "Max_Dmg_Record": 1106.3,
+      "Avg_Dmg_Carry": 590.3,
+      "Secondary_Carry": "HO_OH(3*) (max 1141)",
+      "Best_Frontline_Tank": "LURANTIS(2*)",
+      "Max_Tank_Record": 1682.4,
+      "Avg_Tank_Absorbed": 911.9,
+      "Secondary_Tank": "SOLGALEO(3*) (max 1263)"
+    },
+    {
+      "Synergy": "FOSSIL",
+      "Best_Carry_DPS": "ROARING_MOON(3*)",
+      "Max_Dmg_Record": 1094.4,
+      "Avg_Dmg_Carry": 557.4,
+      "Secondary_Carry": "REGIROCK(3*) (max 759)",
+      "Best_Frontline_Tank": "REGIDRAGO(3*)",
+      "Max_Tank_Record": 1541.3,
+      "Avg_Tank_Absorbed": 1239.5,
+      "Secondary_Tank": "REGICE(3*) (max 1464)"
+    },
+    {
+      "Synergy": "GROUND",
+      "Best_Carry_DPS": "ZYGARDE_50(3*)",
+      "Max_Dmg_Record": 1087.2,
+      "Avg_Dmg_Carry": 519.8,
+      "Secondary_Carry": "LANDORUS(3*) (max 879)",
+      "Best_Frontline_Tank": "PRIMAL_GROUDON(4*)",
+      "Max_Tank_Record": 1905.8,
+      "Avg_Tank_Absorbed": 1250.7,
+      "Secondary_Tank": "TORTERRA(3*) (max 1704)"
+    },
+    {
+      "Synergy": "WATER",
+      "Best_Carry_DPS": "PRIMAL_KYOGRE(4*)",
+      "Max_Dmg_Record": 1017.1,
+      "Avg_Dmg_Carry": 422.9,
+      "Secondary_Carry": "MANAPHY(3*) (max 917)",
+      "Best_Frontline_Tank": "PALKIA(3*)",
+      "Max_Tank_Record": 1009.8,
+      "Avg_Tank_Absorbed": 650.9,
+      "Secondary_Tank": "SAMUROTT(3*) (max 933)"
+    },
+    {
+      "Synergy": "FLORA",
+      "Best_Carry_DPS": "SHAYMIN_SKY(4*)",
+      "Max_Dmg_Record": 987.7,
+      "Avg_Dmg_Carry": 557.1,
+      "Secondary_Carry": "XERNEAS(3*) (max 1001)",
+      "Best_Frontline_Tank": "OGERPON_TEAL(3*)",
+      "Max_Tank_Record": 2180.7,
+      "Avg_Tank_Absorbed": 1633.0,
+      "Secondary_Tank": "MARACTUS(3*) (max 1655)"
+    },
+    {
+      "Synergy": "GRASS",
+      "Best_Carry_DPS": "SHAYMIN_SKY(4*)",
+      "Max_Dmg_Record": 987.7,
+      "Avg_Dmg_Carry": 557.1,
+      "Secondary_Carry": "VIRIZION(3*) (max 865)",
+      "Best_Frontline_Tank": "OGERPON_TEAL(3*)",
+      "Max_Tank_Record": 2180.7,
+      "Avg_Tank_Absorbed": 1633.0,
+      "Secondary_Tank": "TORTERRA(3*) (max 2110)"
+    },
+    {
+      "Synergy": "FIELD",
+      "Best_Carry_DPS": "SERPERIOR(3*)",
+      "Max_Dmg_Record": 892.4,
+      "Avg_Dmg_Carry": 625.7,
+      "Secondary_Carry": "HEATMOR(3*) (max 881)",
+      "Best_Frontline_Tank": "SAMUROTT(3*)",
+      "Max_Tank_Record": 1023.5,
+      "Avg_Tank_Absorbed": 759.5,
+      "Secondary_Tank": "SUICUNE(3*) (max 1025)"
+    },
+    {
+      "Synergy": "BUG",
+      "Best_Carry_DPS": "GENESECT(3*)",
+      "Max_Dmg_Record": 847.3,
+      "Avg_Dmg_Carry": 508.5,
+      "Secondary_Carry": "BEAUTIFLY(3*) (max 673)",
+      "Best_Frontline_Tank": "HERACROSS(3*)",
+      "Max_Tank_Record": 1929.3,
+      "Avg_Tank_Absorbed": 645.5,
+      "Secondary_Tank": "BEAUTIFLY(3*) (max 1251)"
+    },
+    {
+      "Synergy": "WILD",
+      "Best_Carry_DPS": "PRIMEAPE(2*)",
+      "Max_Dmg_Record": 749.2,
+      "Avg_Dmg_Carry": 269.5,
+      "Secondary_Carry": "SUICUNE(3*) (max 667)",
+      "Best_Frontline_Tank": "EMBOAR(3*)",
+      "Max_Tank_Record": 1216.4,
+      "Avg_Tank_Absorbed": 559.0,
+      "Secondary_Tank": "RAIKOU(3*) (max 1056)"
+    },
+    {
+      "Synergy": "BABY",
+      "Best_Carry_DPS": "CHINGLING(2*)",
+      "Max_Dmg_Record": 381.7,
+      "Avg_Dmg_Carry": 150.2,
+      "Secondary_Carry": "HAPPINY(1*) (max 140)",
+      "Best_Frontline_Tank": "HAPPINY(1*)",
+      "Max_Tank_Record": 616.9,
+      "Avg_Tank_Absorbed": 484.0,
+      "Secondary_Tank": "CHINGLING(2*) (max 472)"
+    }
+  ],
+  "global_top_dps_pokemon": [
+    {
+      "Pokemon": "MEWTWO(3*)",
+      "Rarity": "LEGENDARY",
+      "Types": "PSYCHIC/MONSTER/ARTIFICIAL",
+      "Matches": 109,
+      "Max_Damage_Record": 1794.6,
+      "Avg_Damage": 637.8,
+      "Max_Tank_Record": 1857.2,
+      "Avg_Tanked": 348.8,
+      "Avg_Spells_Cast": 2.21,
+      "Avg_Kills": 2.55
+    },
+    {
+      "Pokemon": "MEW(3*)",
+      "Rarity": "LEGENDARY",
+      "Types": "PSYCHIC/AMORPHOUS",
+      "Matches": 32,
+      "Max_Damage_Record": 1367.8,
+      "Avg_Damage": 683.0,
+      "Max_Tank_Record": 713.9,
+      "Avg_Tanked": 442.8,
+      "Avg_Spells_Cast": 5.66,
+      "Avg_Kills": 2.41
+    },
+    {
+      "Pokemon": "MELOETTA(3*)",
+      "Rarity": "LEGENDARY",
+      "Types": "NORMAL/SOUND",
+      "Matches": 143,
+      "Max_Damage_Record": 1336.5,
+      "Avg_Damage": 523.0,
+      "Max_Tank_Record": 1113.8,
+      "Avg_Tanked": 375.5,
+      "Avg_Spells_Cast": 4.52,
+      "Avg_Kills": 2.03
+    },
+    {
+      "Pokemon": "KELDEO(3*)",
+      "Rarity": "LEGENDARY",
+      "Types": "AQUATIC/FIGHTING",
+      "Matches": 20,
+      "Max_Damage_Record": 1309.1,
+      "Avg_Damage": 429.8,
+      "Max_Tank_Record": 829.2,
+      "Avg_Tanked": 543.5,
+      "Avg_Spells_Cast": 2.9,
+      "Avg_Kills": 1.35
+    },
+    {
+      "Pokemon": "KYUREM(3*)",
+      "Rarity": "LEGENDARY",
+      "Types": "DRAGON/ICE",
+      "Matches": 89,
+      "Max_Damage_Record": 1261.6,
+      "Avg_Damage": 520.6,
+      "Max_Tank_Record": 937.2,
+      "Avg_Tanked": 313.2,
+      "Avg_Spells_Cast": 2.25,
+      "Avg_Kills": 2.03
+    },
+    {
+      "Pokemon": "PECHARUNT(3*)",
+      "Rarity": "LEGENDARY",
+      "Types": "POISON/GHOST/GOURMET",
+      "Matches": 51,
+      "Max_Damage_Record": 1254.1,
+      "Avg_Damage": 540.2,
+      "Max_Tank_Record": 2247.9,
+      "Avg_Tanked": 505.2,
+      "Avg_Spells_Cast": 1.96,
+      "Avg_Kills": 1.98
+    },
+    {
+      "Pokemon": "GARCHOMP(3*)",
+      "Rarity": "EPIC",
+      "Types": "DRAGON/GROUND/MONSTER",
+      "Matches": 16,
+      "Max_Damage_Record": 1249.0,
+      "Avg_Damage": 581.8,
+      "Max_Tank_Record": 1109.2,
+      "Avg_Tanked": 659.4,
+      "Avg_Spells_Cast": 2.31,
+      "Avg_Kills": 2.25
+    },
+    {
+      "Pokemon": "GALLADE(3*)",
+      "Rarity": "EPIC",
+      "Types": "PSYCHIC/FIGHTING/HUMAN",
+      "Matches": 32,
+      "Max_Damage_Record": 1247.2,
+      "Avg_Damage": 530.8,
+      "Max_Tank_Record": 1503.7,
+      "Avg_Tanked": 555.7,
+      "Avg_Spells_Cast": 1.41,
+      "Avg_Kills": 2.0
+    },
+    {
+      "Pokemon": "THUNDURUS(3*)",
+      "Rarity": "LEGENDARY",
+      "Types": "FLYING/ELECTRIC",
+      "Matches": 12,
+      "Max_Damage_Record": 1220.9,
+      "Avg_Damage": 606.3,
+      "Max_Tank_Record": 748.0,
+      "Avg_Tanked": 409.8,
+      "Avg_Spells_Cast": 4.0,
+      "Avg_Kills": 2.58
+    },
+    {
+      "Pokemon": "MEGA_RAYQUAZA(4*)",
+      "Rarity": "LEGENDARY",
+      "Types": "DRAGON/FLYING",
+      "Matches": 69,
+      "Max_Damage_Record": 1200.7,
+      "Avg_Damage": 595.8,
+      "Max_Tank_Record": 1297.7,
+      "Avg_Tanked": 461.8,
+      "Avg_Spells_Cast": 1.81,
+      "Avg_Kills": 2.49
+    },
+    {
+      "Pokemon": "SHADOW_LUGIA(3*)",
+      "Rarity": "LEGENDARY",
+      "Types": "AQUATIC/FLYING/DARK",
+      "Matches": 50,
+      "Max_Damage_Record": 1195.4,
+      "Avg_Damage": 472.2,
+      "Max_Tank_Record": 1000.2,
+      "Avg_Tanked": 492.7,
+      "Avg_Spells_Cast": 2.64,
+      "Avg_Kills": 2.02
+    },
+    {
+      "Pokemon": "HYDRAPPLE(4*)",
+      "Rarity": "UNIQUE",
+      "Types": "DRAGON/GOURMET/GRASS",
+      "Matches": 37,
+      "Max_Damage_Record": 1186.3,
+      "Avg_Damage": 306.1,
+      "Max_Tank_Record": 627.4,
+      "Avg_Tanked": 119.6,
+      "Avg_Spells_Cast": 1.68,
+      "Avg_Kills": 1.3
+    },
+    {
+      "Pokemon": "IRON_VALIANT(3*)",
+      "Rarity": "LEGENDARY",
+      "Types": "FIGHTING/FAIRY/ARTIFICIAL",
+      "Matches": 57,
+      "Max_Damage_Record": 1185.8,
+      "Avg_Damage": 543.3,
+      "Max_Tank_Record": 2608.9,
+      "Avg_Tanked": 690.2,
+      "Avg_Spells_Cast": 4.37,
+      "Avg_Kills": 2.23
+    },
+    {
+      "Pokemon": "HO_OH(3*)",
+      "Rarity": "LEGENDARY",
+      "Types": "FIRE/FLYING/LIGHT",
+      "Matches": 71,
+      "Max_Damage_Record": 1166.1,
+      "Avg_Damage": 468.5,
+      "Max_Tank_Record": 939.7,
+      "Avg_Tanked": 419.8,
+      "Avg_Spells_Cast": 1.69,
+      "Avg_Kills": 1.66
+    },
+    {
+      "Pokemon": "TINKATON(3*)",
+      "Rarity": "EPIC",
+      "Types": "STEEL/FAIRY",
+      "Matches": 14,
+      "Max_Damage_Record": 1161.2,
+      "Avg_Damage": 574.0,
+      "Max_Tank_Record": 1383.3,
+      "Avg_Tanked": 985.0,
+      "Avg_Spells_Cast": 1.86,
+      "Avg_Kills": 2.21
+    },
+    {
+      "Pokemon": "NIHILEGO(3*)",
+      "Rarity": "LEGENDARY",
+      "Types": "POISON/ROCK/AMORPHOUS",
+      "Matches": 164,
+      "Max_Damage_Record": 1134.0,
+      "Avg_Damage": 462.4,
+      "Max_Tank_Record": 1008.4,
+      "Avg_Tanked": 322.5,
+      "Avg_Spells_Cast": 2.92,
+      "Avg_Kills": 1.85
+    },
+    {
+      "Pokemon": "PORYGON_2(2*)",
+      "Rarity": "ULTRA",
+      "Types": "NORMAL/ARTIFICIAL",
+      "Matches": 53,
+      "Max_Damage_Record": 1132.1,
+      "Avg_Damage": 478.1,
+      "Max_Tank_Record": 929.2,
+      "Avg_Tanked": 391.6,
+      "Avg_Spells_Cast": 2.64,
+      "Avg_Kills": 2.06
+    },
+    {
+      "Pokemon": "INFERNAPE(3*)",
+      "Rarity": "COMMON",
+      "Types": "FIRE/FIGHTING/HUMAN",
+      "Matches": 100,
+      "Max_Damage_Record": 1124.4,
+      "Avg_Damage": 344.0,
+      "Max_Tank_Record": 1489.1,
+      "Avg_Tanked": 527.4,
+      "Avg_Spells_Cast": 1.69,
+      "Avg_Kills": 1.34
+    },
+    {
+      "Pokemon": "SUDOWOODO(2*)",
+      "Rarity": "EPIC",
+      "Types": "ROCK/FLORA/MONSTER",
+      "Matches": 70,
+      "Max_Damage_Record": 1124.0,
+      "Avg_Damage": 218.9,
+      "Max_Tank_Record": 1768.4,
+      "Avg_Tanked": 839.0,
+      "Avg_Spells_Cast": 1.86,
+      "Avg_Kills": 0.6
+    },
+    {
+      "Pokemon": "DRAGAPULT(3*)",
+      "Rarity": "HATCH",
+      "Types": "DRAGON/GHOST",
+      "Matches": 91,
+      "Max_Damage_Record": 1106.6,
+      "Avg_Damage": 386.4,
+      "Max_Tank_Record": 830.5,
+      "Avg_Tanked": 255.6,
+      "Avg_Spells_Cast": 1.63,
+      "Avg_Kills": 1.58
+    }
+  ],
+  "global_top_tank_pokemon": [
+    {
+      "Pokemon": "IRON_VALIANT(3*)",
+      "Rarity": "LEGENDARY",
+      "Types": "FIGHTING/FAIRY/ARTIFICIAL",
+      "Matches": 57,
+      "Max_Damage_Record": 1185.8,
+      "Avg_Damage": 543.3,
+      "Max_Tank_Record": 2608.9,
+      "Avg_Tanked": 690.2,
+      "Avg_Spells_Cast": 4.37,
+      "Avg_Kills": 2.23
+    },
+    {
+      "Pokemon": "PECHARUNT(3*)",
+      "Rarity": "LEGENDARY",
+      "Types": "POISON/GHOST/GOURMET",
+      "Matches": 51,
+      "Max_Damage_Record": 1254.1,
+      "Avg_Damage": 540.2,
+      "Max_Tank_Record": 2247.9,
+      "Avg_Tanked": 505.2,
+      "Avg_Spells_Cast": 1.96,
+      "Avg_Kills": 1.98
+    },
+    {
+      "Pokemon": "GUZZLORD(3*)",
+      "Rarity": "LEGENDARY",
+      "Types": "GOURMET/DARK/MONSTER",
+      "Matches": 85,
+      "Max_Damage_Record": 926.6,
+      "Avg_Damage": 306.1,
+      "Max_Tank_Record": 2211.6,
+      "Avg_Tanked": 673.3,
+      "Avg_Spells_Cast": 1.88,
+      "Avg_Kills": 1.15
+    },
+    {
+      "Pokemon": "OGERPON_TEAL(3*)",
+      "Rarity": "LEGENDARY",
+      "Types": "GRASS/FLORA",
+      "Matches": 6,
+      "Max_Damage_Record": 660.2,
+      "Avg_Damage": 528.0,
+      "Max_Tank_Record": 2180.7,
+      "Avg_Tanked": 1633.0,
+      "Avg_Spells_Cast": 4.33,
+      "Avg_Kills": 1.33
+    },
+    {
+      "Pokemon": "TORTERRA(3*)",
+      "Rarity": "RARE",
+      "Types": "GRASS/GROUND/MONSTER",
+      "Matches": 24,
+      "Max_Damage_Record": 602.7,
+      "Avg_Damage": 279.7,
+      "Max_Tank_Record": 2109.9,
+      "Avg_Tanked": 1036.0,
+      "Avg_Spells_Cast": 2.38,
+      "Avg_Kills": 0.71
+    },
+    {
+      "Pokemon": "BRELOOM(2*)",
+      "Rarity": "UNCOMMON",
+      "Types": "GRASS/FIGHTING",
+      "Matches": 22,
+      "Max_Damage_Record": 658.9,
+      "Avg_Damage": 253.6,
+      "Max_Tank_Record": 2098.6,
+      "Avg_Tanked": 813.3,
+      "Avg_Spells_Cast": 2.5,
+      "Avg_Kills": 0.82
+    },
+    {
+      "Pokemon": "HERACROSS(3*)",
+      "Rarity": "UNIQUE",
+      "Types": "BUG/FIGHTING",
+      "Matches": 12,
+      "Max_Damage_Record": 816.8,
+      "Avg_Damage": 388.5,
+      "Max_Tank_Record": 1929.3,
+      "Avg_Tanked": 645.5,
+      "Avg_Spells_Cast": 2.25,
+      "Avg_Kills": 1.75
+    },
+    {
+      "Pokemon": "SHAYMIN_SKY(4*)",
+      "Rarity": "LEGENDARY",
+      "Types": "GRASS/FLORA/FLYING",
+      "Matches": 30,
+      "Max_Damage_Record": 987.7,
+      "Avg_Damage": 557.1,
+      "Max_Tank_Record": 1925.4,
+      "Avg_Tanked": 587.5,
+      "Avg_Spells_Cast": 2.93,
+      "Avg_Kills": 2.23
+    },
+    {
+      "Pokemon": "PRIMAL_GROUDON(4*)",
+      "Rarity": "LEGENDARY",
+      "Types": "GROUND/MONSTER/FIRE",
+      "Matches": 23,
+      "Max_Damage_Record": 757.7,
+      "Avg_Damage": 314.2,
+      "Max_Tank_Record": 1905.8,
+      "Avg_Tanked": 1250.7,
+      "Avg_Spells_Cast": 3.17,
+      "Avg_Kills": 0.78
+    },
+    {
+      "Pokemon": "STAKATAKA(3*)",
+      "Rarity": "LEGENDARY",
+      "Types": "ROCK/STEEL",
+      "Matches": 41,
+      "Max_Damage_Record": 531.8,
+      "Avg_Damage": 249.8,
+      "Max_Tank_Record": 1883.8,
+      "Avg_Tanked": 983.2,
+      "Avg_Spells_Cast": 2.41,
+      "Avg_Kills": 0.95
+    },
+    {
+      "Pokemon": "MEWTWO(3*)",
+      "Rarity": "LEGENDARY",
+      "Types": "PSYCHIC/MONSTER/ARTIFICIAL",
+      "Matches": 109,
+      "Max_Damage_Record": 1794.6,
+      "Avg_Damage": 637.8,
+      "Max_Tank_Record": 1857.2,
+      "Avg_Tanked": 348.8,
+      "Avg_Spells_Cast": 2.21,
+      "Avg_Kills": 2.55
+    },
+    {
+      "Pokemon": "SUDOWOODO(2*)",
+      "Rarity": "EPIC",
+      "Types": "ROCK/FLORA/MONSTER",
+      "Matches": 70,
+      "Max_Damage_Record": 1124.0,
+      "Avg_Damage": 218.9,
+      "Max_Tank_Record": 1768.4,
+      "Avg_Tanked": 839.0,
+      "Avg_Spells_Cast": 1.86,
+      "Avg_Kills": 0.6
+    },
+    {
+      "Pokemon": "VIRIZION(3*)",
+      "Rarity": "LEGENDARY",
+      "Types": "GRASS/FIGHTING",
+      "Matches": 29,
+      "Max_Damage_Record": 865.0,
+      "Avg_Damage": 451.0,
+      "Max_Tank_Record": 1748.0,
+      "Avg_Tanked": 863.3,
+      "Avg_Spells_Cast": 1.72,
+      "Avg_Kills": 1.52
+    },
+    {
+      "Pokemon": "STEENEE(2*)",
+      "Rarity": "EPIC",
+      "Types": "GRASS/FIGHTING/GOURMET",
+      "Matches": 56,
+      "Max_Damage_Record": 370.4,
+      "Avg_Damage": 159.9,
+      "Max_Tank_Record": 1745.1,
+      "Avg_Tanked": 508.3,
+      "Avg_Spells_Cast": 1.71,
+      "Avg_Kills": 0.57
+    },
+    {
+      "Pokemon": "LURANTIS(2*)",
+      "Rarity": "RARE",
+      "Types": "FLORA/LIGHT/FIGHTING",
+      "Matches": 31,
+      "Max_Damage_Record": 380.8,
+      "Avg_Damage": 212.6,
+      "Max_Tank_Record": 1682.4,
+      "Avg_Tanked": 819.9,
+      "Avg_Spells_Cast": 2.0,
+      "Avg_Kills": 0.58
+    },
+    {
+      "Pokemon": "ABOMASNOW(2*)",
+      "Rarity": "EPIC",
+      "Types": "GRASS/ICE/MONSTER",
+      "Matches": 47,
+      "Max_Damage_Record": 324.8,
+      "Avg_Damage": 169.0,
+      "Max_Tank_Record": 1675.1,
+      "Avg_Tanked": 624.5,
+      "Avg_Spells_Cast": 1.32,
+      "Avg_Kills": 0.53
+    },
+    {
+      "Pokemon": "LILIGANT(2*)",
+      "Rarity": "UNCOMMON",
+      "Types": "GRASS/FLORA/HUMAN",
+      "Matches": 22,
+      "Max_Damage_Record": 241.1,
+      "Avg_Damage": 91.1,
+      "Max_Tank_Record": 1675.0,
+      "Avg_Tanked": 626.0,
+      "Avg_Spells_Cast": 1.73,
+      "Avg_Kills": 0.41
+    },
+    {
+      "Pokemon": "HATTERENE(3*)",
+      "Rarity": "UNCOMMON",
+      "Types": "FAIRY/PSYCHIC",
+      "Matches": 112,
+      "Max_Damage_Record": 631.5,
+      "Avg_Damage": 177.0,
+      "Max_Tank_Record": 1673.6,
+      "Avg_Tanked": 586.5,
+      "Avg_Spells_Cast": 1.33,
+      "Avg_Kills": 0.34
+    },
+    {
+      "Pokemon": "REGIDRAGO(3*)",
+      "Rarity": "LEGENDARY",
+      "Types": "DRAGON/FOSSIL/MONSTER",
+      "Matches": 27,
+      "Max_Damage_Record": 624.0,
+      "Avg_Damage": 400.4,
+      "Max_Tank_Record": 1670.8,
+      "Avg_Tanked": 1118.8,
+      "Avg_Spells_Cast": 2.56,
+      "Avg_Kills": 1.37
+    },
+    {
+      "Pokemon": "GROUDON(3*)",
+      "Rarity": "LEGENDARY",
+      "Types": "GROUND/MONSTER",
+      "Matches": 18,
+      "Max_Damage_Record": 702.6,
+      "Avg_Damage": 296.7,
+      "Max_Tank_Record": 1661.9,
+      "Avg_Tanked": 926.2,
+      "Avg_Spells_Cast": 1.89,
+      "Avg_Kills": 0.94
+    }
+  ]
+}

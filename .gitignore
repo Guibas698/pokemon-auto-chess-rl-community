@@ -1,0 +1,17 @@
+# Ignorar clone completo upstream (2GB+ de sprites/sons/node_modules)
+# Os dados essenciais (pokemons-data.csv e botv2.json) já estão incluídos em data/
+upstream/
+
+# Python caches e ambientes virtuais
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+
+# Checkpoints pesados temporários
+*.ckpt
+*.tmp
