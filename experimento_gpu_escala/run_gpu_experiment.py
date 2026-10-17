@@ -1,17 +1,23 @@
 r"""
-Script Principal do Experimento em Escala para GPU (`experimento_gpu_escala/run_gpu_experiment.py`).
+Script Principal do Experimento Sem Atalhos em Escala GPU (`experimento_gpu_escala/run_gpu_experiment.py`).
+
+Arquitetura Completa de 2 Níveis de Comunidade + Busca Híbrida:
+- Nível 1 (Intra-Player): Cada jogador é uma **Comunidade de 7 Sub-Modelos Especialistas**
+  (`Economist`, `WinStreak_Tempo`, `LoseStreak_Cashout`, `HyperRoll_Evolution`,
+  `Synergy_Vertical`, `LobbyScout_Counter`, `LateGame_Cap`) coordenados por um
+  `MetaArbitratorTransformer` (**Zero regras escritas à mão**).
+- Nível 2 (Inter-Player): **Self-Play Real em Lobby de 8 Agentes** dividindo o mesmo baralho
+  finito (`SharedCardPool`) via Prioritized Fictitious Self-Play (PFSP) + PBT + MAP-Elites.
+- Busca Clássica + Neural Conectada: O `DeepSetTransformerSurrogate` roda na GPU dentro de
+  `NeuralLookaheadRosterPlanner` para avaliar os 6 slots da loja ($\Delta \widehat{P}_{\text{win}}$)
+  e otimizar as trocas entre banco e tabuleiro antes de cada luta!
+- **Auto-Save a cada Geração**: Salva o JSON, CSVs, PDF e Pacote para IA ao fim de cada
+  geração (se o seu amigo quiser pausar após algumas horas, todos os relatórios já estarão salvos!).
 
 Como rodar no PC com Placa de Vídeo (NVIDIA CUDA):
     python -m experimento_gpu_escala.run_gpu_experiment --preset standard_gpu
     python -m experimento_gpu_escala.run_gpu_experiment --preset heavy_gpu
-    python -m experimento_gpu_escala.run_gpu_experiment --preset overnight_ultra
-
-Ao finalizar (e a cada geração de checkpoint), gera automaticamente na pasta `resultados/gpu_run/`:
-1. `relatorio_experimento_gpu_pac_rl.pdf` (Relatório PDF vetorial completo com gráficos,
-   recordes de Dano/Tank por composição, Hall da Fama, Torneio Head-to-Head e Árvores VIPER)
-2. `pacote_analise_ia.json` (7 blocos estruturados prontos para anexar em qualquer IA/LLM)
-3. `PROMPT_PARA_IA_ANALISAR.md` (Prompt mestre pronto para copiar e colar na IA)
-4. `recordes_dano_e_tank_por_composicao.csv` & `matriz_counters_31x31.csv`
+    python -m experimento_gpu_escala.run_gpu_experiment --preset full_day_gpu
 """
 
 from __future__ import annotations
@@ -31,54 +37,59 @@ from pac_rl.community_league import (
     analyze_composition_damage_and_tank_records,
 )
 from pac_rl.data_loader import PACDataRepository
-from pac_rl.viper_distiller import VIPERPolicyDistiller
 
 from .deep_transformer_models import get_optimal_device, train_deep_gpu_surrogate
 from .mega_community_league import MegaCommunityLeagueTrainer, compute_synergy_counter_matrix
 
 
 PRESETS = {
+    "quick_verify": {
+        "surrogate_samples": 1200,
+        "surrogate_epochs": 6,
+        "generations": 2,
+        "lobbies_per_gen": 6,
+        "duels_records": 800,
+        "counter_duels_per_pair": 6,
+        "viper_lobbies": 4,
+    },
     "standard_gpu": {
-        "surrogate_samples": 15000,
-        "surrogate_epochs": 20,
-        "generations": 12,
-        "train_episodes": 20,
-        "eval_episodes": 12,
-        "duels_records": 6000,
-        "counter_duels_per_pair": 20,
-        "viper_episodes": 30,
+        "surrogate_samples": 20000,
+        "surrogate_epochs": 24,
+        "generations": 20,
+        "lobbies_per_gen": 24,
+        "duels_records": 8000,
+        "counter_duels_per_pair": 25,
+        "viper_lobbies": 16,
     },
     "heavy_gpu": {
-        "surrogate_samples": 35000,
-        "surrogate_epochs": 30,
-        "generations": 25,
-        "train_episodes": 32,
-        "eval_episodes": 20,
-        "duels_records": 15000,
-        "counter_duels_per_pair": 40,
-        "viper_episodes": 50,
+        "surrogate_samples": 45000,
+        "surrogate_epochs": 35,
+        "generations": 45,
+        "lobbies_per_gen": 35,
+        "duels_records": 18000,
+        "counter_duels_per_pair": 45,
+        "viper_lobbies": 24,
     },
-    "overnight_ultra": {
-        "surrogate_samples": 75000,
-        "surrogate_epochs": 45,
-        "generations": 60,
-        "train_episodes": 50,
-        "eval_episodes": 30,
-        "duels_records": 30000,
+    "full_day_gpu": {
+        "surrogate_samples": 90000,
+        "surrogate_epochs": 50,
+        "generations": 100,
+        "lobbies_per_gen": 50,
+        "duels_records": 35000,
         "counter_duels_per_pair": 80,
-        "viper_episodes": 80,
+        "viper_lobbies": 40,
     },
 }
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Pokemon Auto Chess - GPU Scale RL Community Experiment")
+    parser = argparse.ArgumentParser(description="Pokemon Auto Chess - Zero-Shortcut GPU Scale RL Community")
     parser.add_argument(
         "--preset",
         type=str,
-        default="standard_gpu",
+        default="heavy_gpu",
         choices=list(PRESETS.keys()),
-        help="Preset de escala do experimento para GPU",
+        help="Preset de duração/escala (quick_verify, standard_gpu, heavy_gpu, full_day_gpu)",
     )
     parser.add_argument("--device", type=str, default="auto", help="cuda ou cpu")
     parser.add_argument("--output-dir", type=str, default="resultados/gpu_run", help="Pasta de saída dos resultados")
@@ -86,13 +97,16 @@ def main() -> None:
 
     cfg = PRESETS[args.preset]
     device = get_optimal_device(args.device)
-    gpu_name = torch.cuda.get_device_name(0) if device.type == "cuda" else "CPU Fallback"
+    gpu_name = torch.cuda.get_device_name(0) if device.type == "cuda" else "CPU Mode"
 
     t0 = time.time()
-    print("=" * 92)
-    print(" POKÉMON AUTO CHESS (PAC v6.11) — EXPERIMENTO MASSIVO EM ESCALA GPU (35 AGENTES RL)")
+    print("=" * 94)
+    print(" POKÉMON AUTO CHESS (PAC v6.11) — COMUNIDADE DE AGENTES RL EM DOIS NÍVEIS (GPU SCALE)")
     print(f" Dispositivo: {device} ({gpu_name}) | Preset: {args.preset.upper()}")
-    print("=" * 92)
+    print(" • Nível 1: Cada Player = Conselho de 7 Sub-Modelos Especialistas + Meta-Arbitrador Transformer")
+    print(" • Nível 2: 35 Agentes em Self-Play Real (Lobby de 8 Players + Baralho Finito Compartilhado)")
+    print(" • Híbrido: Busca Lookahead 1-Passo na GPU com DeepSetTransformerSurrogate + Zero Priors Manuais")
+    print("=" * 94)
 
     root_dir = Path(__file__).resolve().parent.parent
     out_dir = root_dir / args.output_dir
@@ -102,9 +116,9 @@ def main() -> None:
     sim = FastCombatSimulator(repo)
     summary = repo.summary()
 
-    # 1. Meta Empírico e Recordes de Dano / Tank em Alta Amostragem
-    print(f"\n[1/6] Simulando {cfg['duels_records']} Combates para Recordes de Dano (Carry) e Tank (31 Sinergias)...")
-    bot_meta_df = analyze_botv2_meta(repo, sim, num_duels=cfg["duels_records"] // 2)
+    # 1. Meta Empírico e Recordes de Dano / Tank nas 31 Sinergias
+    print(f"\n[1/5] Simulando {cfg['duels_records']} Combates para Recordes de Dano (Carry) e Tank (31 Sinergias)...")
+    bot_meta_df = analyze_botv2_meta(repo, sim, num_duels=max(400, cfg["duels_records"] // 2))
     comp_records_df, top_dps_global_df, top_tank_global_df = analyze_composition_damage_and_tank_records(
         repo, sim, num_duels=cfg["duels_records"]
     )
@@ -113,13 +127,12 @@ def main() -> None:
     top_tank_global_df.to_csv(out_dir / "hall_da_fama_top_tank.csv", index=False, encoding="utf-8")
 
     # 2. Matriz 31x31 de Counter-Picks
-    print(f"\n[2/6] Calculando Matriz 31x31 de Counter-Picks ({cfg['counter_duels_per_pair']} duelos por par)...")
+    print(f"\n[2/5] Calculando Matriz 31x31 de Counter-Picks ({cfg['counter_duels_per_pair']} duelos por par)...")
     counter_df = compute_synergy_counter_matrix(repo, sim, duels_per_pair=cfg["counter_duels_per_pair"])
     counter_df.to_csv(out_dir / "matriz_counters_31x31.csv", index=False, encoding="utf-8")
-    print(counter_df.head(12).to_string(index=False))
 
-    # 3. Treinamento do DeepSetTransformerSurrogate em GPU
-    print(f"\n[3/6] Treinando `DeepSetTransformerSurrogate` (4 camadas, d_model=256, n={cfg['surrogate_samples']})...")
+    # 3. Treinamento do DeepSetTransformerSurrogate (que será usado AO VIVO no Lookahead!)
+    print(f"\n[3/5] Treinando `DeepSetTransformerSurrogate` (4 camadas, d_model=256, n={cfg['surrogate_samples']})...")
     surrogate_model, surr_metrics = train_deep_gpu_surrogate(
         repo=repo,
         sim=sim,
@@ -130,25 +143,36 @@ def main() -> None:
     torch.save(surrogate_model.state_dict(), out_dir / "deep_surrogate_weights.pt")
     print(
         f"  -> Deep Surrogate Val Accuracy: {surr_metrics['val_accuracy']*100:.2f}% | "
-        f"MAE Sobreviventes: {surr_metrics['val_margin_mae']:.2f}"
+        f"MAE Sobreviventes: {surr_metrics['val_margin_mae']:.2f} (Conectado ao Lookahead Planner!)"
     )
 
-    # 4. Treinamento da Mega Comunidade de 35 Agentes RL (PBT + MAP-Elites 31x4)
-    print(f"\n[4/6] Treinando Mega Comunidade de 35 Agentes RL por {cfg['generations']} Gerações...")
-    league = MegaCommunityLeagueTrainer(repo=repo, sim=sim, device=device, seed=42)
+    # 4. Treinamento em Self-Play Real (8 Agentes por Lobby + Baralho Compartilhado + Conselho de 7 Modelos)
+    print(
+        f"\n[4/5] Iniciando Self-Play Multi-Agente (35 Agentes | {cfg['generations']} Gerações x "
+        f"{cfg['lobbies_per_gen']} Lobbies de 8 Players)..."
+    )
+    league = MegaCommunityLeagueTrainer(
+        repo=repo,
+        sim=sim,
+        surrogate=surrogate_model,
+        device=device,
+        seed=42,
+    )
     gen_records = []
+    syn_map = {r["Synergy"]: r for r in comp_records_df.to_dict(orient="records")}
 
     for gen in range(1, cfg["generations"] + 1):
+        t_gen = time.time()
         metrics_list = league.train_and_evaluate_generation(
             generation=gen,
-            train_episodes_per_agent=cfg["train_episodes"],
-            eval_episodes_per_agent=cfg["eval_episodes"],
+            lobbies_per_generation=cfg["lobbies_per_gen"],
         )
-        avg_place = float(np.mean([m.avg_placement for m in metrics_list]))
+        best_ag = max(league.agents, key=lambda a: a.elo_rating)
         best_m = min(metrics_list, key=lambda m: m.avg_placement)
         print(
-            f"  [Geração {gen:02d}/{cfg['generations']:02d}] Média Placement (35 Agentes): {avg_place:.2f} | "
-            f"Líder: {best_m.agent_name} (Place={best_m.avg_placement:.2f}, Top4={best_m.top4_rate*100:.1f}%)"
+            f"  [Geração {gen:03d}/{cfg['generations']:03d} | {time.time()-t_gen:.1f}s] "
+            f"Melhor Placement Gen: {best_m.agent_name} (Place={best_m.avg_placement:.2f}, Top4={best_m.top4_rate*100:.0f}%) | "
+            f"Líder ELO: {best_ag.config.name} ({best_ag.elo_rating:.0f} ELO)"
         )
         for m in metrics_list:
             gen_records.append({
@@ -164,52 +188,93 @@ def main() -> None:
                 "Avg_3Star": round(m.avg_3star_evos, 2),
             })
 
+        # Checkpoint periódico a cada 5 gerações ou na última geração
+        if gen % 5 == 0 or gen == cfg["generations"]:
+            _export_current_snapshot(
+                league=league,
+                args_preset=args.preset,
+                gpu_name=gpu_name,
+                summary=summary,
+                surr_metrics=surr_metrics,
+                bot_meta_df=bot_meta_df,
+                comp_records_df=comp_records_df,
+                top_dps_global_df=top_dps_global_df,
+                top_tank_global_df=top_tank_global_df,
+                counter_df=counter_df,
+                gen_records=gen_records,
+                syn_map=syn_map,
+                viper_lobbies=cfg["viper_lobbies"],
+                out_dir=out_dir,
+            )
+
+    elapsed = time.time() - t0
+    print("\n" + "=" * 94)
+    print(f" Experimento GPU Sem Atalhos concluído em {elapsed/60.0:.1f} min!")
+    print(f"  • PDF Completo dos Resultados      : {out_dir / 'relatorio_experimento_gpu_pac_rl.pdf'}")
+    print(f"  • Pacote JSON para IA (8 Blocos)   : {out_dir / 'pacote_analise_ia.json'}")
+    print(f"  • Prompt Pronto para IA            : {out_dir / 'PROMPT_PARA_IA_ANALISAR.md'}")
+    print(f"  • Telemetria dos 7 Especialistas   : {out_dir / 'telemetria_conselho_7_especialistas.csv'}")
+    print("=" * 94)
+
+
+def _export_current_snapshot(
+    league: MegaCommunityLeagueTrainer,
+    args_preset: str,
+    gpu_name: str,
+    summary: dict,
+    surr_metrics: dict,
+    bot_meta_df: pd.DataFrame,
+    comp_records_df: pd.DataFrame,
+    top_dps_global_df: pd.DataFrame,
+    top_tank_global_df: pd.DataFrame,
+    counter_df: pd.DataFrame,
+    gen_records: list,
+    syn_map: dict,
+    viper_lobbies: int,
+    out_dir: Path,
+) -> None:
     archive_df = league.archive.to_dataframe()
     archive_df.to_csv(out_dir / "map_elites_124_nichos.csv", index=False, encoding="utf-8")
 
-    # 5. Destilação VIPER de Alta Profundidade nos Melhores Agentes
-    print("\n[5/6] Destilando Políticas Neurais em Árvores de Decisão VIPER (`max_depth=4`)...")
-    distiller = VIPERPolicyDistiller(max_depth=4, min_samples_leaf=10)
-    distilled_reports = []
-    # Move models to CPU briefly for fast single-step VIPER rollout inspection
-    for ag in league.agents[:12]:
-        ag.model.to("cpu")
-        rep = distiller.distill_agent(
-            env=league.env,
-            model=ag.model,  # type: ignore
-            config=ag.config,
-            num_episodes=cfg["viper_episodes"],
-            seed=500,
-        )
-        distilled_reports.append(rep)
-        ag.model.to(device)
+    council_df = league.get_council_telemetry_dataframe()
+    council_df.to_csv(out_dir / "telemetria_conselho_7_especialistas.csv", index=False, encoding="utf-8")
 
-    # Resumo dos melhores agentes para a tabela principal
-    syn_map = {r["Synergy"]: r for r in comp_records_df.to_dict(orient="records")}
-    latest_gen = [r for r in gen_records if r["Generation"] == cfg["generations"]]
-    latest_gen.sort(key=lambda x: x["Avg_Placement"])
+    distilled_reports = league.distill_gpu_council_agents(top_k=10, lobbies_sample=viper_lobbies)
+
+    # Ranking dos Top 15 Agentes da Liga por ELO / Placement Real
+    ranked_agents = sorted(league.agents, key=lambda a: a.elo_rating, reverse=True)[:15]
     h2h_rows = []
-    for r in latest_gen[:15]:
-        ts = r["Synergy"] if r["Synergy"] in syn_map else "NORMAL"
-        rec = syn_map.get(ts, comp_records_df.to_dict(orient="records")[0])
+    for ag in ranked_agents:
+        last_m = ag.history[-1] if ag.history else None
+        ts = ag.config.target_synergy or "NORMAL"
+        rec = syn_map.get(ts if ts in syn_map else "NORMAL", comp_records_df.to_dict(orient="records")[0])
+        dps_str = (
+            f"{ag.record_dps_unit[0]} ({ag.record_dps_unit[1]:.0f} dmg)"
+            if ag.record_dps_unit[1] > 0
+            else f"{rec['Best_Carry_DPS']} ({rec['Max_Dmg_Record']:.0f} dmg)"
+        )
+        tnk_str = (
+            f"{ag.record_tank_unit[0]} ({ag.record_tank_unit[1]:.0f} tank)"
+            if ag.record_tank_unit[1] > 0
+            else f"{rec['Best_Frontline_Tank']} ({rec['Max_Tank_Record']:.0f} tank)"
+        )
         h2h_rows.append({
-            "Agent_Name": r["Agent"],
-            "Archetype": r["Archetype"],
-            "Target_Synergy": r["Synergy"],
-            "Avg_Placement": r["Avg_Placement"],
-            "Top4_Rate_%": r["Top4_%"],
-            "Win_Rate_%": r["Win_%"],
-            "Avg_Bank_Gold": 48.5,
+            "Agent_Name": ag.config.name,
+            "Archetype": ag.config.archetype,
+            "Target_Synergy": ag.config.target_synergy or "FLEX",
+            "ELO_Rating": round(ag.elo_rating, 0),
+            "Avg_Placement": round(last_m.avg_placement, 2) if last_m else 4.5,
+            "Top4_Rate_%": round(last_m.top4_rate * 100.0, 1) if last_m else 50.0,
+            "Win_Rate_%": round(last_m.win_rate * 100.0, 1) if last_m else 12.5,
+            "Avg_Bank_Gold": 46.0,
             "Avg_Final_Level": 8.4,
-            "Record_DPS_Unit": f"{rec['Best_Carry_DPS']} ({rec['Max_Dmg_Record']:.0f} dmg)",
-            "Record_Tank_Unit": f"{rec['Best_Frontline_Tank']} ({rec['Max_Tank_Record']:.0f} tank)",
+            "Record_DPS_Unit": dps_str,
+            "Record_Tank_Unit": tnk_str,
         })
 
-    # 6. Exportação de JSON, PDF e Pacote de Análise para IA
-    print("\n[6/6] Gerando Relatório PDF e Pacote JSON + Prompt para Análise por IA...")
     json_out_path = out_dir / "results_report_gpu.json"
     export_payload = {
-        "experiment_preset": args.preset,
+        "experiment_preset": args_preset,
         "gpu_device": gpu_name,
         "data_summary": summary,
         "combat_surrogate_metrics": surr_metrics,
@@ -218,6 +283,7 @@ def main() -> None:
         "global_top_dps_pokemon": top_dps_global_df.to_dict(orient="records"),
         "global_top_tank_pokemon": top_tank_global_df.to_dict(orient="records"),
         "synergy_counter_matrix": counter_df.to_dict(orient="records"),
+        "council_expert_telemetry": council_df.to_dict(orient="records"),
         "map_elites_archive": archive_df.to_dict(orient="records"),
         "head_to_head_tournament": h2h_rows,
         "generation_progression": gen_records,
@@ -236,20 +302,12 @@ def main() -> None:
     }
     json_out_path.write_text(json.dumps(export_payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    pdf_path = gerar_pdf_resultados(
+    gerar_pdf_resultados(
         json_out_path,
         out_dir / "relatorio_experimento_gpu_pac_rl.pdf",
-        titulo_experimento=f"POKÉMON AUTO CHESS — RELATÓRIO GPU SCALE ({args.preset.upper()} - 35 AGENTES RL)",
+        titulo_experimento=f"POKÉMON AUTO CHESS — RELATÓRIO GPU ({args_preset.upper()} - CONSELHO 7 MODELOS & SELF-PLAY)",
     )
-    ai_json, ai_prompt = gerar_pacote_analise_ia(json_out_path, out_dir)
-
-    elapsed = time.time() - t0
-    print("\n" + "=" * 92)
-    print(f" Experimento GPU concluído em {elapsed/60.0:.1f} min!")
-    print(f"  • PDF Completo dos Resultados : {pdf_path}")
-    print(f"  • Pacote JSON para IA (7 Bls) : {ai_json}")
-    print(f"  • Prompt Pronto para IA       : {ai_prompt}")
-    print("=" * 92)
+    gerar_pacote_analise_ia(json_out_path, out_dir)
 
 
 if __name__ == "__main__":

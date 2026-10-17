@@ -321,6 +321,39 @@ def gerar_pdf_resultados(
             pdf.savefig(fig)
             plt.close(fig)
 
+        # =====================================================================
+        # PÁGINA 6 (OPCIONAL — GPU ESCALA): TELEMETRIA DO CONSELHO DE 7 MODELOS & COUNTERS
+        # =====================================================================
+        council_df = pd.DataFrame(data.get("council_expert_telemetry", []))
+        counter_df = pd.DataFrame(data.get("synergy_counter_matrix", []))
+        if not council_df.empty or not counter_df.empty:
+            fig = plt.figure(figsize=(11.69, 8.27))
+            fig.suptitle(
+                "COMUNIDADE INTRA-JOGADOR (CONSELHO DE 7 SUB-MODELOS) & MATRIZ DE COUNTERS 31x31",
+                fontsize=12.5,
+                fontweight="bold",
+                color="#0f172a",
+                y=0.96,
+            )
+            if not council_df.empty:
+                ax_cn = fig.add_axes([0.02, 0.50, 0.96, 0.42])
+                ax_cn.set_title(
+                    "Pesos de Atenção do MetaArbitratorTransformer por Fase da Partida (Early / Mid / Late)",
+                    fontsize=9.5,
+                    fontweight="bold",
+                )
+                _draw_styled_table(ax_cn, council_df.head(14), font_size=7.0, header_color="#4c1d95")
+            if not counter_df.empty:
+                ax_ct = fig.add_axes([0.02, 0.04, 0.96, 0.42])
+                ax_ct.set_title(
+                    "Principais Relações de Counter Direto entre Sinergias (Matriz Empírica 31x31)",
+                    fontsize=9.5,
+                    fontweight="bold",
+                )
+                _draw_styled_table(ax_ct, counter_df.head(14), font_size=7.5, header_color="#7c2d12")
+            pdf.savefig(fig)
+            plt.close(fig)
+
     return pdf_path
 
 
@@ -330,9 +363,9 @@ def gerar_pacote_analise_ia(
 ) -> Tuple[Path, Path]:
     """
     Transforma os resultados brutos das simulações e do treinamento RL em:
-    1. `pacote_analise_ia.json`: Dividido em 7 blocos semânticos compactos e pré-digeridos
+    1. `pacote_analise_ia.json`: Dividido em 8 blocos semânticos compactos e pré-digeridos
        com estatísticas de conversão, sinergias dominantes, recordistas de dano/tank por
-       composição e regras VIPER.
+       composição, regras VIPER, matriz de counters 31x31 e telemetria do Conselho de 7 Modelos.
     2. `PROMPT_PARA_IA_ANALISAR.md`: Prompt estruturado pronto para colar em qualquer LLM
        (ChatGPT, Claude, Gemini) junto com o JSON após rodar os testes no PC com GPU.
     """
@@ -353,11 +386,13 @@ def gerar_pacote_analise_ia(
 
     pacote_ia = {
         "instrucoes_do_pacote": (
-            "Este arquivo contém os resultados estruturados em 7 blocos do laboratório de "
-            "Aprendizado por Reforço Comunitário (Maskable PPO + PBT + MAP-Elites + VIPER) "
+            "Este arquivo contém os resultados estruturados em 8 blocos do laboratório de "
+            "Aprendizado por Reforço Comunitário (Maskable PPO + Conselho de 7 Sub-Modelos + "
+            "Self-Play com Pool Compartilhado + Lookahead Neural + PBT + MAP-Elites + VIPER) "
             "aplicado ao jogo Pokémon Auto Chess (PAC v6.11)."
         ),
         "bloco_1_resumo_executivo_e_regras_do_jogo": {
+            "arquitetura_experimento": raw.get("architecture_upgrade", "CPU_Baseline_Or_GPU_ZeroShortcut"),
             "regras_oficiais_pac": {
                 "reroll_custo_ouro": 1,
                 "xp_custo_ouro": 4,
@@ -369,6 +404,13 @@ def gerar_pacote_analise_ia(
                 "evolucao": "3 cópias 1* -> 2*, 3 cópias 2* (9 total) -> 3*",
                 "estagios_additional_picks": [5, 8, 11],
                 "estagios_unique_e_legendary": [10, 20],
+                "pool_compartilhado_por_raridade_2 estrelas_e_3_estrelas": {
+                    "COMMON": [18, 27],
+                    "UNCOMMON": [13, 19],
+                    "RARE": [9, 18],
+                    "EPIC": [7, 14],
+                    "ULTRA": [5, 10],
+                },
             },
             "dataset_carregado": raw.get("data_summary", {}),
             "acuracia_surrogate_neural_combate": raw.get("combat_surrogate_metrics", {}),
@@ -398,6 +440,10 @@ def gerar_pacote_analise_ia(
             }
             for r in viper_rules
         ],
+        "bloco_8_matriz_counters_31x31_e_telemetria_conselho_7_modelos": {
+            "telemetria_conselho_7_submodelos_por_fase": raw.get("council_expert_telemetry", []),
+            "matriz_counters_diretos_31x31": raw.get("synergy_counter_matrix", []),
+        },
     }
 
     ai_json_path = out_dir / "pacote_analise_ia.json"
@@ -406,39 +452,37 @@ def gerar_pacote_analise_ia(
     prompt_md = f"""# Prompt Estruturado para Análise Profunda por IA (Pokémon Auto Chess RL Lab)
 
 > **Como usar este arquivo**:
-> Quando o experimento terminar de rodar (seja na versão CPU ou na versão massiva em GPU no PC do seu amigo), basta anexar o arquivo **`pacote_analise_ia.json`** na conversa com qualquer IA (ChatGPT, Claude, Gemini, etc.) e colar o prompt abaixo!
+> Quando o experimento terminar de rodar (seja na versão CPU ou na versão Zero-Shortcut em GPU no PC do seu amigo), basta anexar o arquivo **`pacote_analise_ia.json`** na conversa com qualquer IA (ChatGPT, Claude, Gemini, etc.) e colar o prompt abaixo!
 
 ---
 
 ## 📋 Copie e Cole o Prompt Abaixo na IA:
 
 ```markdown
-Atue como um Cientista Sênior de Aprendizado por Reforço (especialista em Multi-Agent League Training, MAP-Elites e Destilação de Políticas VIPER) e Analista Challenger de Auto-Battlers (Pokémon Auto Chess / TFT).
+Atue como um Cientista Sênior de Aprendizado por Reforço (especialista em Multi-Agent Self-Play League Training, Mixture-of-Experts Hierárquico, MAP-Elites e Destilação de Políticas VIPER) e Analista Challenger de Auto-Battlers (Pokémon Auto Chess / TFT).
 
-Estou anexando o arquivo `pacote_analise_ia.json`, que contém os dados empíricos gerados por uma Comunidade de Modelos de Aprendizado por Reforço (PyTorch Maskable PPO + Set-Transformer Combat Surrogate + Árvores de Decisão VIPER) treinada no código-fonte real do Pokémon Auto Chess (PAC v6.11, com 1.077 Pokémon, 31 sinergias e 726 bots da comunidade).
+Estou anexando o arquivo `pacote_analise_ia.json`, que contém os dados empíricos gerados por uma Comunidade de 2 Níveis de Aprendizado por Reforço (Nível 1: cada jogador é governado por um Conselho de 7 Sub-Modelos Especialistas arbitrados por um Transformer Meta-Árbitro + Lookahead Neural no `DeepSetTransformerSurrogate` + Rastreador Hipergeométrico de Pool; Nível 2: Liga de 35 Agentes em Self-Play de 8 jogadores disputando o mesmo `SharedCardPool` finito) treinada no código-fonte real do Pokémon Auto Chess (PAC v6.11, com 1.077 Pokémon, 31 sinergias e 726 bots da comunidade).
 
-Analise minuciosamente os 7 blocos do JSON (`bloco_1` a `bloco_7`) e elabore um **Guia Mestre Estratégico e Matemático do Meta**, respondendo de forma detalhada e estruturada aos seguintes pontos:
+Analise minuciosamente os 8 blocos do JSON (`bloco_1` a `bloco_8`) e elabore um **Guia Mestre Estratégico e Matemático do Meta**, respondendo de forma detalhada e estruturada aos seguintes pontos:
 
 ### 1. Diagnóstico Econômico: Standard Econ (50g) vs. Hyper-Roll (Reroll 1g) vs. Tempo Win-Streak vs. Lose-Streak Cashout
 - Com base no `bloco_5_torneio_head_to_head_comunidade_rl`, explique matematicamente qual arquétipo domina em **Consistência (Top-4 / Placement Médio)** e qual domina em **Teto de Vitória (Top-1 Win Rate %)**.
-- Como o custo reduzido de Reroll (`1g`) e as rodadas PvE (`1, 2, 3, 9, 14, 19...`) afetam a viabilidade de Lose-Streak em comparação ao Hyper-Roll e ao Fast-8/9?
+- Como o custo reduzido de Reroll (`1g`), o pool finito compartilhado (`SharedCardPool`) e as rodadas PvE (`1, 2, 3, 9, 14, 19...`) afetam a viabilidade de Lose-Streak em comparação ao Hyper-Roll e ao Fast-8/9?
 
 ### 2. Guia Definitivo de Composições: Melhor Carry (Recorde de Dano) e Melhor Tank (Recorde de Frontline) por Tipo
 - Cruzando o `bloco_2_ranking_meta_sinergias_botv2`, o `bloco_3_recordes_dano_e_tank_por_composicao_31_tipos` e o `bloco_4_hall_da_fama_global_pokemon`:
   - Monte uma **Tier List (S, A, B, C)** das melhores sinergias do jogo.
   - Para cada uma das principais composições, indique explicitamente **qual é o Pokémon Carry Principal (Recordista de Dano)**, **qual é o Carry Secundário**, **qual é o Pokémon Tank Principal (Recordista de Absorção/Mitigação)** e **qual é o Tank Secundário**.
-  - Quais Pokémon apareceram como " Outliers / Hidden OP" (alto dano ou alto tank mesmo em raridades baixas/médias quando evoluídos para 3 estrelas)?
+  - Quais Pokémon apareceram como "Outliers / Hidden OP" (alto dano ou alto tank mesmo em raridades baixas/médias quando evoluídos para 3 estrelas)?
 
-### 3. Regras Práticas de Jogo Extraídas das Árvores VIPER (`SE ... ENTÃO ...`)
-- Analise o `bloco_7_heuristicas_destiladas_viper_arvores_decisao`.
-- Traduza as árvores de decisão das redes neurais em um **Checklist de Decisão para Humanos** dividido por fase da partida:
-  - **Early Game (Estágios 1 a 9)**: Quando guardar ouro vs. quando rodar a loja ou subir de nível?
-  - **Mid Game (Estágios 10 a 19 — Uniques e Additional Picks)**: Quais gatilhos de `player_hp`, `gold`, `bench_size` e `shop_synergy_matches` fazem os melhores agentes darem all-in ou subirem para o nível 7/8?
-  - **Late Game (Estágios 20+ — Legendaries)**: Como converter vantagem econômica em Top-1?
+### 3. Regras Práticas de Jogo Extraídas das Árvores VIPER (`SE ... ENTÃO ...`) e do Conselho de 7 Sub-Modelos
+- Analise o `bloco_7_heuristicas_destiladas_viper_arvores_decisao` e o `bloco_8_matriz_counters_31x31_e_telemetria_conselho_7_modelos`.
+- Como o `MetaArbitratorTransformer` alterna os pesos entre os 7 especialistas internos (`Economist_50g`, `WinStreak_Tempo`, `LoseStreak_Cashout`, `HyperRoll_3Star`, `Synergy_Vertical`, `LobbyScout_Counter`, `LateGame_Cap`) do **Early Game (Estágios 1-9)** para o **Mid Game (10-17)** e **Late Game (18+)**?
+- Traduza as árvores de decisão das redes neurais em um **Checklist de Decisão para Humanos** dividido por fase da partida.
 
-### 4. Mapa de Nichos MAP-Elites (`Sinergia x Economia`)
-- Com base no `bloco_6_matriz_map_elites_nichos_sinergia_x_economia`, quais tipos/sinergias funcionam melhor com **Hyper-Roll (3 estrelas)** e quais tipos exigem obrigatoriamente **Standard Econ Fast-8/9**?
-- Aponte eventuais relações de *Counter* (Pedra-Papel-Tesoura) entre composições de Explosão/Crítico (`DARK`, `FIRE`, `ELECTRIC`), Sustentação (`FLORA`, `GRASS`, `GOURMET`, `NORMAL`) e Mitigação/Controle (`FIGHTING`, `STEEL`, `WATER`, `ICE`, `DRAGON`).
+### 4. Mapa de Nichos MAP-Elites (`Sinergia x Economia`) e Matriz de Counters 31x31
+- Com base no `bloco_6_matriz_map_elites_nichos_sinergia_x_economia` e no `bloco_8`, quais tipos/sinergias funcionam melhor com **Hyper-Roll (3 estrelas)** e quais tipos exigem obrigatoriamente **Standard Econ Fast-8/9**?
+- Liste os **Counters Diretos mais fortes** da Matriz $31 \times 31$: se o lobby estiver contestando determinada sinergia dominante, qual composição devo escolher para fazer *counter* direto?
 ```
 """
 
@@ -446,3 +490,4 @@ Analise minuciosamente os 7 blocos do JSON (`bloco_1` a `bloco_7`) e elabore um 
     prompt_path.write_text(prompt_md, encoding="utf-8")
 
     return ai_json_path, prompt_path
+

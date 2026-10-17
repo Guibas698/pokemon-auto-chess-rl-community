@@ -1,6 +1,7 @@
 {
-  "instrucoes_do_pacote": "Este arquivo contém os resultados estruturados em 7 blocos do laboratório de Aprendizado por Reforço Comunitário (Maskable PPO + PBT + MAP-Elites + VIPER) aplicado ao jogo Pokémon Auto Chess (PAC v6.11).",
+  "instrucoes_do_pacote": "Este arquivo contém os resultados estruturados em 8 blocos do laboratório de Aprendizado por Reforço Comunitário (Maskable PPO + Conselho de 7 Sub-Modelos + Self-Play com Pool Compartilhado + Lookahead Neural + PBT + MAP-Elites + VIPER) aplicado ao jogo Pokémon Auto Chess (PAC v6.11).",
   "bloco_1_resumo_executivo_e_regras_do_jogo": {
+    "arquitetura_experimento": "CPU_Baseline_Or_GPU_ZeroShortcut",
     "regras_oficiais_pac": {
       "reroll_custo_ouro": 1,
       "xp_custo_ouro": 4,
@@ -18,7 +19,29 @@
       "estagios_unique_e_legendary": [
         10,
         20
-      ]
+      ],
+      "pool_compartilhado_por_raridade_2 estrelas_e_3_estrelas": {
+        "COMMON": [
+          18,
+          27
+        ],
+        "UNCOMMON": [
+          13,
+          19
+        ],
+        "RARE": [
+          9,
+          18
+        ],
+        "EPIC": [
+          7,
+          14
+        ],
+        "ULTRA": [
+          5,
+          10
+        ]
+      }
     },
     "dataset_carregado": {
       "total_pokemon": 1077,
@@ -1544,5 +1567,9 @@
         "GUARDAR_OURO_ENCERRAR_TURNO": 0.011279407025459234
       }
     }
-  ]
+  ],
+  "bloco_8_matriz_counters_31x31_e_telemetria_conselho_7_modelos": {
+    "telemetria_conselho_7_submodelos_por_fase": [],
+    "matriz_counters_diretos_31x31": []
+  }
 }

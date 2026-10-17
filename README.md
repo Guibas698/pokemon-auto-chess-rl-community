@@ -20,52 +20,50 @@ Ao contrário do *Teamfight Tactics (TFT)*, o **Pokémon Auto Chess (PAC)** poss
 
 ---
 
-## 🏗️ Arquitetura Híbrida (Deep RL + Métodos Clássicos)
+## 🏗️ Arquitetura Híbrida Zero-Shortcut (2 Níveis de Comunidade + Lookahead Neural + Métodos Clássicos)
 
 ```mermaid
 flowchart LR
-    subgraph Dados["📦 Dados Oficiais PAC (data/)"]
+    subgraph Dados["📦 Dados & Regras Oficiais PAC (data/)"]
         CSV["pokemons-data.csv\n(1.077 Pokémon, 31 Sinergias)"]
         BOTS["botv2.json\n(726 Bots da Comunidade)"]
+        POOL["SharedCardPool Finito\n(COMMON 18/27, UNCOMMON 13/19,\nRARE 9/18, EPIC 7/14, ULTRA 5/10)"]
     end
 
-    subgraph Ambiente["🎮 Ambiente Gymnasium (8 Jogadores)"]
-        ENV["PokemonAutoChessGymEnv\nAction Masking (22 Ações)\nJuros 50g, Reroll 1g, XP 4g\nEvoluções 1*->2*->3*"]
-        SIM["FastCombatSimulator (6x4)\nARMOR_FACTOR = 0.05\nTelemetria de Dano & Tank"]
-        SURR["SetTransformerCombatSurrogate\n(PyTorch MultiheadAttention)\n90.7%+ Val Accuracy"]
+    subgraph Nivel1["🧠 Nível 1: Comunidade Intra-Jogador (Conselho de 7 Sub-Modelos)"]
+        COUNCIL["CommunityOfModelsBrain\n7 Especialistas Neurais:\n1. Economist_50g\n2. WinStreak_Tempo\n3. LoseStreak_Cashout\n4. HyperRoll_3Star\n5. Synergy_Vertical\n6. LobbyScout_Counter\n7. LateGame_Cap"]
+        ARB["MetaArbitratorTransformer\n(Atenção Multi-Head sobre os 7 Votos\nZero Priors Manuais)"]
+        LOOK["NeuralLookaheadRosterPlanner +\nHypergeometricPoolTracker\n(ΔP_win via DeepSetTransformer GPU)"]
     end
 
-    subgraph Comunidade["🧬 Comunidade de Modelos RL (PBT + MAP-Elites)"]
-        AG1["Standard Econ 50g\n(Fast-8/9 Compounder)"]
-        AG2["Hyper-Roll 1g\n(Caçador de 3 Estrelas)"]
-        AG3["Tempo Win-Streak\n(Pressão de Nível/HP)"]
-        AG4["Lose-Streak Cashout\n(Economia Reversa + Pivot)"]
-        AG5["31 Especialistas de Tipo\n(FIRE, WATER, DRAGON, FIGHTING...)"]
+    subgraph Nivel2["🏟️ Nível 2: Comunidade Inter-Jogadores (Liga Self-Play 8-Player)"]
+        PFSP["Matchmaking PFSP\n8 Jogadores na Mesma Sala\nDisputando o Mesmo Pool\nScouting do Lobby (Contested Ratio)"]
+        REW["MultiScaleRewardEngine\n1. Macro: Zero-Sum Placement + Anti-Hoarding\n2. Meso: Risco Quadrático HP + Cashout Pivot\n3. Micro: Shaping Potencial γΦ(s') - Φ(s)"]
     end
 
     subgraph Saida["📊 Destilação & Relatórios (resultados/)"]
         VIPER["VIPER Policy Distiller\n(Árvores SE...ENTÃO...)"]
         PDF["Relatório PDF Multi-Página\n(Gráficos + Tabelas + Recordes)"]
-        AIPACK["Pacote JSON (7 Blocos) +\nPROMPT_PARA_IA_ANALISAR.md"]
+        AIPACK["Pacote JSON (8 Blocos) +\nPROMPT_PARA_IA_ANALISAR.md"]
     end
 
-    Dados --> Ambiente
-    Ambiente --> Comunidade
-    Comunidade --> Saida
+    Dados --> Nivel1
+    Nivel1 --> Nivel2
+    Nivel2 --> Saida
 ```
 
 ---
 
-## 📂 Estrutura do Repositório (Dois Experimentos: CPU & GPU em Escala)
+## 📂 Estrutura do Repositório (Dois Experimentos: CPU 10min & GPU Full-Day Zero-Shortcut)
 
 O repositório está organizado em **duas suítes complementares**:
 
 | Pasta / Script | Propósito | Hardware Alvo |
 | :--- | :--- | :--- |
-| 📁 **[`pac_rl/`](./pac_rl/)** + [`run_pac_python.py`](./run_pac_python.py) | **Experimento Base (CPU)**: Comunidade de 8 Agentes RL (`RewardConditionedMaskedActorCritic`), `SetTransformerCombatSurrogate` (`d_model=64`), Torneio Head-to-Head, Recordes de Dano/Tank das 31 Sinergias e Destilação VIPER. | **Qualquer PC / Notebook (CPU)** (~10 min) |
-| 🚀 **[`experimento_gpu_escala/`](./experimento_gpu_escala/)** | **Experimento Massivo para GPU (CUDA + AMP FP16)**: Mega Comunidade de **35 Agentes RL** (todas as 31 Sinergias + 4 Economias Puras), `DeepSetTransformerSurrogate` de 4 camadas (`d_model=256, nhead=8`) com Cross-Attention inter-times, Arquivo MAP-Elites completo ($31 \times 4 = 124$ células) e Matriz de Counters $31 \times 31$. | **PC com Placa de Vídeo NVIDIA (CUDA)** |
+| 📁 **[`pac_rl/`](./pac_rl/)** + [`run_pac_python.py`](./run_pac_python.py) | **Experimento Base Rápido (CPU)**: Comunidade de 8 Agentes RL (`RewardConditionedMaskedActorCritic`), `SetTransformerCombatSurrogate` (`d_model=64`), Torneio Head-to-Head, Recordes de Dano/Tank das 31 Sinergias e Destilação VIPER. | **Qualquer PC / Notebook (CPU)** (~10 min) |
+| 🚀 **[`experimento_gpu_escala/`](./experimento_gpu_escala/)** | **Experimento Zero-Shortcut para GPU (CUDA + AMP FP16)**:<br>• **Comunidade Nível 1 (Intra-Jogador)**: Cada jogador é uma `CommunityOfModelsBrain` com **7 Sub-Modelos Especialistas** arbitrados por um `MetaArbitratorTransformer` (**zero priors manuais**).<br>• **Comunidade Nível 2 (Inter-Jogadores)**: **Self-Play Real de 8 Jogadores** disputando o mesmo `SharedCardPool` finito (`pools.ts`) com pareamento PFSP e `LobbyScoutingAggregator`.<br>• **Fusão Clássico + Neural Real**: `NeuralLookaheadRosterPlanner` consulta o `DeepSetTransformerSurrogate` na GPU antes de cada ação para medir o ganho marginal $\Delta \widehat{P}_{\text{win}}(\text{shop}[i])$, combinado com `HypergeometricPoolTracker` exato.<br>• **Engenharia de Recompensa em 3 Escalas (`MultiScaleRewardEngine`)**: Macro Zero-Sum Convex Placement + Penalidade Anti-Hoarding, Meso Risco Quadrático de HP + Cashout Pivot + Equilíbrio Carry/Tank, e Micro Modelagem de Potencial $\gamma \Phi(s') - \Phi(s)$ (Ng et al., 1999). | **PC com Placa de Vídeo NVIDIA (CUDA)** (Horas ou 1 Dia Inteiro) |
 | 📊 **[`resultados/`](./resultados/)** | **Resultados Prontos, PDF Vetorial, CSVs de Recordes de Dano/Tank e Pacote de Análise para IA** (`pacote_analise_ia.json` + `PROMPT_PARA_IA_ANALISAR.md`). | Visualização no GitHub / PDF / IA |
-| 🛠️ **[`gerar_relatorios.py`](./gerar_relatorios.py)** | Utilitário que lê qualquer JSON de resultados (CPU ou GPU) e gera automaticamente o **PDF Multi-Página** e o **Pacote de Análise para IA**. | CPU / GPU |
+| 🛠️ **[`gerar_relatorios.py`](./gerar_relatorios.py)** | Utilitário que lê qualquer JSON de resultados (CPU ou GPU) e gera automaticamente o **PDF Multi-Página** e o **Pacote de Análise para IA (8 Blocos)**. | CPU / GPU |
 
 ---
 
@@ -118,26 +116,29 @@ git clone https://github.com/Guibas698/pokemon-auto-chess-rl-community.git
 cd pokemon-auto-chess-rl-community
 pip install -r requirements.txt
 ```
-*(Caso a máquina tenha GPU NVIDIA, instale o PyTorch com suporte CUDA em [pytorch.org](https://pytorch.org/get-started/locally/)).*
+*(Na máquina com GPU NVIDIA, instale o PyTorch com suporte CUDA em [pytorch.org](https://pytorch.org/get-started/locally/)).*
 
-### 2. Executar o Experimento Massivo em GPU (`experimento_gpu_escala`)
+### 2. Executar o Experimento Zero-Shortcut em GPU (`experimento_gpu_escala`)
 
-O script [`experimento_gpu_escala/run_gpu_experiment.py`](./experimento_gpu_escala/run_gpu_experiment.py) possui **3 presets** prontos:
+O script [`experimento_gpu_escala/run_gpu_experiment.py`](./experimento_gpu_escala/run_gpu_experiment.py) possui **4 presets** prontos (salva checkpoints automáticos do PDF e do JSON a cada geração, podendo ser interrompido a qualquer momento sem perder nada):
 
 ```bash
-# Preset Padrão GPU (~15.000 combates Surrogate + 35 Agentes RL por 12 Gerações)
+# 1. Verificação Rápida (~3-5 min: testa toda a arquitetura de Conselho de 7 Modelos + SharedPool)
+python -m experimento_gpu_escala.run_gpu_experiment --preset quick_verify
+
+# 2. Preset Padrão GPU (~1h-2h: 20.000 combates Surrogate + 35 Agentes Conselho por 16 Gerações)
 python -m experimento_gpu_escala.run_gpu_experiment --preset standard_gpu
 
-# Preset Pesado GPU (~35.000 combates Surrogate + 35 Agentes RL por 25 Gerações)
+# 3. Preset Pesado GPU (~3h-5h: 45.000 combates Surrogate + 35 Agentes Conselho por 35 Gerações)
 python -m experimento_gpu_escala.run_gpu_experiment --preset heavy_gpu
 
-# Preset Overnight Ultra (~75.000 combates Surrogate + 35 Agentes RL por 60 Gerações)
-python -m experimento_gpu_escala.run_gpu_experiment --preset overnight_ultra
+# 4. Preset Dia Inteiro / Overnight (~8h-16h: 90.000 combates Surrogate + 35 Agentes Conselho por 80 Gerações)
+python -m experimento_gpu_escala.run_gpu_experiment --preset full_day_gpu
 ```
 
-Assim que terminar, o script cria automaticamente na pasta **`resultados/gpu_run/`**:
-* 📄 **`relatorio_experimento_gpu_pac_rl.pdf`**: O PDF completo com os gráficos e tabelas das milhares de partidas.
-* 🤖 **`pacote_analise_ia.json`**: Os 7 blocos JSON compactados com todos os recordes de Dano/Tank, matriz $31 \times 31$ de counters, MAP-Elites de 124 nichos e árvores VIPER.
+A cada geração e ao final do experimento, o script atualiza automaticamente na pasta **`resultados/gpu_run/`**:
+* 📄 **`relatorio_experimento_gpu_pac_rl.pdf`**: O PDF completo com os gráficos, recordes de Dano/Tank das 31 sinergias, pesos do Conselho de 7 Sub-Modelos por fase da partida e árvores VIPER.
+* 🤖 **`pacote_analise_ia.json`**: Os **8 blocos JSON** compactados com todos os recordes de Dano/Tank, telemetria do Conselho de 7 Modelos, matriz $31 \times 31$ de counters, MAP-Elites de 124 nichos e árvores VIPER.
 * 💬 **`PROMPT_PARA_IA_ANALISAR.md`**: O prompt pronto para você jogar na IA junto com o `pacote_analise_ia.json` e extrair o guia estratégico completo!
 
 ### 3. Regerar o PDF ou Pacote de IA Manualmente a Qualquer Momento
@@ -145,3 +146,4 @@ Assim que terminar, o script cria automaticamente na pasta **`resultados/gpu_run
 ```bash
 python gerar_relatorios.py --input-json resultados/gpu_run/results_report_gpu.json --output-dir resultados/gpu_run --pdf-name relatorio_gpu.pdf
 ```
+

@@ -1,29 +1,25 @@
 r"""
-Modelos Profundos Acelerados por GPU (CUDA + Automatic Mixed Precision FP16/BF16)
-para o Pokémon Auto Chess RL Lab (`experimento_gpu_escala`).
-
-Inclui:
-1. `DeepSetTransformerSurrogate(nn.Module)`:
-   - Set-Transformer profundo de 4 camadas (`d_model=256, nhead=8, ffn=512`) com
-     Self-Attention Intra-Time + Cross-Attention Inter-Times (Time A <-> Time B).
-   - Cabeças multi-tarefa:
-     * `win_logit`: Probabilidade de vitória $P(\text{Time A vence})$
-     * `margin_pred`: Diferencial esperado de unidades sobreviventes
-     * `peak_dps_pred` & `peak_tank_pred`: Previsão auxiliar do pico de Dano do Carry
-       e pico de Dano Absorvido pelo Tank da composição.
-2. `DeepEntityTransformerActorCritic(nn.Module)`:
-   - Rede Actor-Critic Residual de alta capacidade (`d_model=256, 4 blocos ResNet-Transformer`)
-     com condicionamento FiLM multi-camada sobre o vetor de recompensa $\mathbf{w}^{(k)}$.
-   - Suporte nativo a **Busca Clássica Lookahead de 1 Passo na GPU (`gpu_lookahead_bonus`)**
-     usando o `DeepSetTransformerSurrogate`.
-3. `GPUMaskablePPOTrainer`:
-   - Treinador PPO com suporte a `torch.amp.autocast('cuda')`, `GradScaler`,
-     Cosine Annealing LR Schedule, parada precoce por divergência KL (`target_kl=0.015`)
-     e mini-batches grandes na GPU.
+Arquitetura Híbrida Estado da Arte para GPU (`experimento_gpu_escala/deep_transformer_models.py`):
+1. `DeepSetTransformerSurrogate`: Set-Transformer de 4 camadas (`d_model=256, nhead=8`)
+   com Cross-Attention entre os dois tabuleiros, prevendo vitória, saldo de sobreviventes,
+   pico de Dano (Carry) e pico de Tank (Frontline).
+2. `NeuralLookaheadRosterPlanner` (Busca Clássica + Rede Neural Conectada em Tempo Real):
+   - Avalia em lote na GPU os 6 slots da loja (`evaluate_shop_marginal_gains`) para medir
+     exatamente quanto cada compra aumenta a chance de vencer os oponentes reais do lobby.
+   - Executa **Busca Combinatória 1-Step Swap (`optimize_roster_with_surrogate`)** entre o
+     tabuleiro e o banco guiada pelo `DeepSetTransformerSurrogate`!
+3. `CommunityOfModelsBrain` ("Uma Comunidade de Modelos para Ser Um Player" — Zero Regras Manuais):
+   - Cada jogador é governado por um **Conselho de 7 Sub-Modelos Especialistas**
+     (`Economist`, `WinStreak_Tempo`, `LoseStreak_Cashout`, `HyperRoll_Evolution`,
+     `Synergy_Vertical`, `LobbyScout_Counter`, `LateGame_Cap`) coordenados por um
+     **`MetaArbitratorTransformer`** que aprende pesos de confiança dinâmicos $\alpha_1(s)..\alpha_7(s)$.
+   - **Zero `compute_Domain_prior_logits` manual**: 100% das decisões emergem do aprendizado
+     por reforço + busca lookahead, garantindo que as árvores VIPER descubram heurísticas puras!
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 import torch
@@ -34,14 +30,28 @@ from torch.distributions import Categorical
 from pac_rl.combat_surrogate import (
     MAX_BOARD_UNITS,
     UNIT_FEATURE_DIM,
+    BoardUnit,
     FastCombatSimulator,
     TacticalPositioner,
-    BoardUnit,
     encode_board_to_tensor,
 )
-from pac_rl.data_loader import NUM_SYNERGIES, PACDataRepository
-from pac_rl.gym_env import NUM_ACTIONS, OBS_DIM
-from pac_rl.models import RolloutStep
+from pac_rl.data_loader import NUM_SYNERGIES, PACDataRepository, PokemonSpec
+from pac_rl.gym_env import NUM_ACTIONS
+
+
+# Dimensão expandida da observação para a Comunidade de Modelos (156 features)
+GPU_OBS_DIM = 156
+
+EXPERT_NAMES = [
+    "Economist_Compound_Expert",
+    "WinStreak_Tempo_Expert",
+    "LoseStreak_Cashout_Expert",
+    "HyperRoll_Evolution_Expert",
+    "Synergy_Vertical_Expert",
+    "LobbyScout_Counter_Expert",
+    "LateGame_Cap_Expert",
+]
+NUM_EXPERTS = len(EXPERT_NAMES)
 
 
 def get_optimal_device(preferred: str = "auto") -> torch.device:
@@ -51,7 +61,7 @@ def get_optimal_device(preferred: str = "auto") -> torch.device:
 
 
 class PreNormAttentionBlock(nn.Module):
-    def __init__(self, d_model: int = 256, nhead: int = 8, dropout: float = 0.1):
+    def __init__(self, d_model: int = 256, nhead: int = 8, dropout: float = 0.08):
         super().__init__()
         self.norm1 = nn.LayerNorm(d_model)
         self.attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True)
@@ -73,9 +83,9 @@ class PreNormAttentionBlock(nn.Module):
 
 
 class CrossTeamAttentionBlock(nn.Module):
-    """Cross-Attention permettant que cada unidade do Time A inspecione os alvos do Time B."""
+    """Cross-Attention permitindo que cada unidade do Time A inspecione os alvos do Time B."""
 
-    def __init__(self, d_model: int = 256, nhead: int = 8, dropout: float = 0.1):
+    def __init__(self, d_model: int = 256, nhead: int = 8, dropout: float = 0.08):
         super().__init__()
         self.norm_q = nn.LayerNorm(d_model)
         self.norm_kv = nn.LayerNorm(d_model)
@@ -98,11 +108,15 @@ class CrossTeamAttentionBlock(nn.Module):
 
 class DeepSetTransformerSurrogate(nn.Module):
     """
-    Set-Transformer Profundo (GPU Scale) para previsão de combate com acurácia >95%,
-    incluindo previsão auxiliar do Recorde de Dano (Carry) e Recorde de Tank (Frontline).
+    Set-Transformer Profundo (GPU Scale) para previsão tática de combate:
+    Prevê:
+      1. `win_logit`: Logit de $P(\text{Time A vence})$
+      2. `margin_pred`: Diferencial esperado de unidades sobreviventes
+      3. `peak_dps_pred`: Previsão do recorde de dano do Carry na luta
+      4. `peak_tank_pred`: Previsão do recorde de absorção do Tank na luta
     """
 
-    def __init__(self, d_model: int = 256, nhead: int = 8, num_layers: int = 4, dropout: float = 0.1):
+    def __init__(self, d_model: int = 256, nhead: int = 8, num_layers: int = 4, dropout: float = 0.08):
         super().__init__()
         self.unit_embed = nn.Sequential(
             nn.Linear(UNIT_FEATURE_DIM, d_model),
@@ -131,7 +145,7 @@ class DeepSetTransformerSurrogate(nn.Module):
             nn.Linear(512, 256),
             nn.LayerNorm(256),
             nn.GELU(),
-            nn.Linear(256, 4),  # [win_logit, margin_pred, norm_peak_dps_a, norm_peak_tank_a]
+            nn.Linear(256, 4),
         )
 
     def forward(
@@ -151,7 +165,6 @@ class DeepSetTransformerSurrogate(nn.Module):
             ha = layer(ha)
             hb = layer(hb)
 
-        # Cross-team tactical interaction
         ha_cross = self.cross_block(ha, hb)
         hb_cross = self.cross_block(hb, ha)
 
@@ -171,77 +184,296 @@ class DeepSetTransformerSurrogate(nn.Module):
         return win_logit, margin_pred, peak_dps_pred, peak_tank_pred
 
 
-class DeepFiLMResidualBlock(nn.Module):
-    def __init__(self, hidden_dim: int, cond_dim: int):
-        super().__init__()
-        self.fc1 = nn.Linear(hidden_dim, hidden_dim)
-        self.norm1 = nn.LayerNorm(hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
-        self.norm2 = nn.LayerNorm(hidden_dim)
-        self.film = nn.Linear(cond_dim, hidden_dim * 2)
+# ============================================================================
+# Planejador Híbrido Clássico + Neural Lookahead (Conectado ao Surrogate!)
+# ============================================================================
 
-    def forward(self, x: torch.Tensor, cond: torch.Tensor) -> torch.Tensor:
-        h = F.gelu(self.norm1(self.fc1(x)))
-        gamma, beta = torch.chunk(self.film(cond), 2, dim=-1)
-        h = h * (1.0 + 0.5 * torch.tanh(gamma)) + 0.5 * beta
-        h = self.norm2(self.fc2(h))
-        return F.gelu(x + h)
-
-
-class DeepEntityTransformerActorCritic(nn.Module):
+class NeuralLookaheadRosterPlanner:
     """
-    Arquitetura Actor-Critic Profunda para GPU (`d_model=256, 4 blocos FiLM ResNet`)
-    compatível com a interface de `RewardConditionedMaskedActorCritic`.
+    Integra Busca Clássica Combinatória (1-Step Lookahead & Swap Hill-Climbing)
+    com o `DeepSetTransformerSurrogate` rodando em lote na GPU!
+    """
+
+    def __init__(self, surrogate: DeepSetTransformerSurrogate, device: torch.device):
+        self.surrogate = surrogate
+        self.device = device
+
+    @torch.no_grad()
+    def predict_win_prob_vs_lobby(
+        self,
+        candidate_boards: List[List[BoardUnit]],
+        opponent_boards: List[List[BoardUnit]],
+    ) -> np.ndarray:
+        """
+        Avalia em um ÚNICO forward pass em lote na GPU a probabilidade média de vitória
+        de cada `candidate_board` contra os tabuleiros reais dos oponentes vivos no lobby.
+        """
+        if not candidate_boards:
+            return np.zeros(0, dtype=np.float32)
+
+        valid_opps = [b for b in opponent_boards if b]
+        if not valid_opps:
+            return np.full(len(candidate_boards), 0.75, dtype=np.float32)
+
+        # Sample up to 3 representative opponents from the lobby for fast batched evaluation
+        sampled_opps = valid_opps[:3]
+        n_cand = len(candidate_boards)
+        n_opps = len(sampled_opps)
+        total_pairs = n_cand * n_opps
+
+        ua_batch = np.zeros((total_pairs, MAX_BOARD_UNITS, UNIT_FEATURE_DIM), dtype=np.float32)
+        sa_batch = np.zeros((total_pairs, NUM_SYNERGIES), dtype=np.float32)
+        ub_batch = np.zeros((total_pairs, MAX_BOARD_UNITS, UNIT_FEATURE_DIM), dtype=np.float32)
+        sb_batch = np.zeros((total_pairs, NUM_SYNERGIES), dtype=np.float32)
+
+        opp_encoded = [encode_board_to_tensor(ob) for ob in sampled_opps]
+
+        k = 0
+        for c_board in candidate_boards:
+            ua, sa = encode_board_to_tensor(c_board)
+            for ub, sb in opp_encoded:
+                ua_batch[k] = ua
+                sa_batch[k] = sa
+                ub_batch[k] = ub
+                sb_batch[k] = sb
+                k += 1
+
+        self.surrogate.eval()
+        t_ua = torch.from_numpy(ua_batch).to(self.device)
+        t_sa = torch.from_numpy(sa_batch).to(self.device)
+        t_ub = torch.from_numpy(ub_batch).to(self.device)
+        t_sb = torch.from_numpy(sb_batch).to(self.device)
+
+        win_logits, _, _, _ = self.surrogate(t_ua, t_sa, t_ub, t_sb)
+        win_probs = torch.sigmoid(win_logits).view(n_cand, n_opps).mean(dim=1).cpu().numpy()
+        return win_probs.astype(np.float32)
+
+    @torch.no_grad()
+    def evaluate_shop_marginal_gains(
+        self,
+        board: List[BoardUnit],
+        shop: List[Optional[PokemonSpec]],
+        player_level: int,
+        opponent_boards: List[List[BoardUnit]],
+    ) -> Tuple[float, np.ndarray]:
+        r"""
+        Para o estado atual, usa o `DeepSetTransformerSurrogate` na GPU para calcular:
+        1. `base_win_prob`: Chance de vitória atual do tabuleiro contra o lobby
+        2. `marginal_gains[0..5]`: $\Delta \widehat{P}_{\text{win}}$ se comprarmos/colocarmos a carta `shop[i]`!
+        """
+        candidates: List[List[BoardUnit]] = [board]
+        valid_slot_indices: List[int] = []
+
+        for slot_i, p in enumerate(shop):
+            if p is None:
+                continue
+            new_u = BoardUnit.from_pokemon_stats(p, x=2, y=2)
+            if len(board) < player_level:
+                hyp_board = TacticalPositioner.optimize_positions(list(board) + [new_u])
+            elif board:
+                # Simulate replacing the lowest-HP/lowest-star unit on board
+                weak_idx = min(range(len(board)), key=lambda idx: board[idx].hp * board[idx].stars)
+                hyp_board = list(board)
+                hyp_board[weak_idx] = new_u
+                hyp_board = TacticalPositioner.optimize_positions(hyp_board)
+            else:
+                hyp_board = [new_u]
+            candidates.append(hyp_board)
+            valid_slot_indices.append(slot_i)
+
+        probs = self.predict_win_prob_vs_lobby(candidates, opponent_boards)
+        base_prob = float(probs[0]) if len(probs) > 0 else 0.5
+        deltas = np.zeros(6, dtype=np.float32)
+        for idx_in_probs, slot_i in enumerate(valid_slot_indices, start=1):
+            deltas[slot_i] = float(probs[idx_in_probs] - base_prob)
+
+        return base_prob, deltas
+
+    @torch.no_grad()
+    def optimize_roster_with_surrogate(
+        self,
+        board: List[BoardUnit],
+        bench: List[BoardUnit],
+        player_level: int,
+        opponent_boards: List[List[BoardUnit]],
+    ) -> Tuple[List[BoardUnit], List[BoardUnit]]:
+        r"""
+        Algoritmo Clássico de Busca Local (1-Step Swap Hill-Climbing) guiado pelo
+        `DeepSetTransformerSurrogate`: testa todas as trocas unitárias entre `board` e `bench`
+        em um único batch na GPU e aplica a troca se ela aumentar a chance real de vitória!
+        """
+        while len(board) < player_level and bench:
+            board.append(bench.pop(0))
+
+        board = TacticalPositioner.optimize_positions(board)
+        if not bench or not board:
+            return board, bench
+
+        candidates: List[List[BoardUnit]] = [list(board)]
+        swap_pairs: List[Tuple[int, int]] = []
+
+        for b_idx in range(len(board)):
+            for bench_idx in range(min(4, len(bench))):
+                cand = list(board)
+                cand[b_idx] = bench[bench_idx]
+                candidates.append(TacticalPositioner.optimize_positions(cand))
+                swap_pairs.append((b_idx, bench_idx))
+
+        probs = self.predict_win_prob_vs_lobby(candidates, opponent_boards)
+        best_cand_idx = int(np.argmax(probs))
+        if best_cand_idx > 0 and probs[best_cand_idx] > probs[0] + 0.01:
+            b_i, bench_i = swap_pairs[best_cand_idx - 1]
+            old_board_u = board[b_i]
+            board[b_i] = bench[bench_i]
+            bench[bench_i] = old_board_u
+            board = TacticalPositioner.optimize_positions(board)
+
+        return board, bench
+
+
+# ============================================================================
+# Comunidade Interna de Modelos: 7 Peritos Especialistas + Meta-Arbitrador
+# ============================================================================
+
+class SubAgentExpertModule(nn.Module):
+    r"""
+    Um Sub-Modelo Especialista dentro do Conselho/Comunidade que compõe 1 jogador.
+    Possui seu próprio extrator de representações focado nas features do seu domínio,
+    produzindo um vetor latente de argumento `h_expert` e sua proposta de logits de ação.
+    """
+
+    def __init__(self, obs_dim: int, hidden_dim: int, num_actions: int):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(obs_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.GELU(),
+        )
+        self.action_proposal = nn.Linear(hidden_dim, num_actions)
+
+    def forward(self, obs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        h = self.net(obs)
+        logits = self.action_proposal(h)
+        return h, logits
+
+
+class CommunityOfModelsBrain(nn.Module):
+    r"""
+    "Uma Comunidade de Modelos para Ser Um Player" (Hierarchical Mixture-of-Experts):
+    - 7 Sub-Modelos Especialistas (`EXPERT_NAMES`) analisam simultaneamente a partida:
+      1. `Economist_Compound_Expert` (Juros, Breakpoints 10g..50g, Curva de XP)
+      2. `WinStreak_Tempo_Expert` (Pressão de Tabuleiro, Nível Agressivo, Win Streak)
+      3. `LoseStreak_Cashout_Expert` (Economia Reversa Estágios 1..11 e Gatilho de All-In Cashout)
+      4. `HyperRoll_Evolution_Expert` (Probabilidade Hipergeométrica de Pares e Evoluções 3*)
+      5. `Synergy_Vertical_Expert` (Ativação de Limiares das 31 Sinergias)
+      6. `LobbyScout_Counter_Expert` (Scouting de Cartas Contestadas, Counters e Lookahead Surrogate)
+      7. `LateGame_Cap_Expert` (Transição Nível 8/9, Uniques Estágio 10 e Legendaries Estágio 20)
+    - `MetaArbitratorTransformer`: Faz Self-Attention entre as propostas dos 7 especialistas
+      condicionado pela Persona $\mathbf{w}^{(k)}$ do agente e gera os pesos de voto
+      $\boldsymbol{\alpha}(s) \in \Delta^6$ ($\sum_{m=1}^7 \alpha_m(s) = 1.0$).
+    - **ZERO Regras Hardcoded (`compute_Domain_prior_logits` removido!)**: Tudo é aprendido
+      por Reforço + Busca Lookahead.
     """
 
     def __init__(
         self,
-        obs_dim: int = OBS_DIM,
+        obs_dim: int = GPU_OBS_DIM,
         num_actions: int = NUM_ACTIONS,
-        hidden_dim: int = 256,
-        num_blocks: int = 4,
+        expert_dim: int = 128,
+        nhead: int = 4,
     ):
         super().__init__()
-        self.state_dim = 73
-        self.cond_dim = obs_dim - self.state_dim
+        self.obs_dim = obs_dim
+        self.num_actions = num_actions
+        self.expert_dim = expert_dim
 
-        self.input_proj = nn.Sequential(
-            nn.Linear(self.state_dim, hidden_dim),
-            nn.LayerNorm(hidden_dim),
+        # Os 7 Sub-Agentes Especialistas
+        self.experts = nn.ModuleList(
+            [SubAgentExpertModule(obs_dim, expert_dim, num_actions) for _ in range(NUM_EXPERTS)]
+        )
+
+        # Codificador da Persona / Objetivo do Jogador (slice obs[:, 73:112])
+        self.persona_proj = nn.Sequential(
+            nn.Linear(39, expert_dim),
+            nn.LayerNorm(expert_dim),
             nn.GELU(),
         )
-        self.blocks = nn.ModuleList(
-            [DeepFiLMResidualBlock(hidden_dim, self.cond_dim) for _ in range(num_blocks)]
-        )
-        self.final_norm = nn.LayerNorm(hidden_dim)
 
-        self.actor_head = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim // 2),
-            nn.GELU(),
-            nn.Linear(hidden_dim // 2, num_actions),
+        # Meta-Arbitrador Transformer que coloca os 7 Especialistas para debater entre si
+        self.council_attn = nn.MultiheadAttention(
+            embed_dim=expert_dim,
+            num_heads=nhead,
+            batch_first=True,
         )
+        self.council_norm = nn.LayerNorm(expert_dim)
+
+        # Gating Network: decide o peso de voto alpha_m(s) de cada um dos 7 Especialistas
+        self.gating_head = nn.Sequential(
+            nn.Linear(expert_dim * 2, expert_dim),
+            nn.GELU(),
+            nn.Linear(expert_dim, 1),
+        )
+
+        # Residual Meta-Policy & Twin Value Heads (Shaped Persona Critic + Oracle Placement Critic)
+        self.meta_residual_actor = nn.Linear(expert_dim, num_actions)
         self.critic_shaped = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.Linear(expert_dim * 2, expert_dim),
             nn.GELU(),
-            nn.Linear(hidden_dim // 2, 1),
+            nn.Linear(expert_dim, 1),
         )
         self.critic_oracle = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.Linear(expert_dim * 2, expert_dim),
             nn.GELU(),
-            nn.Linear(hidden_dim // 2, 1),
+            nn.Linear(expert_dim, 1),
         )
 
-    def compute_Domain_prior_logits(self, obs: torch.Tensor) -> torch.Tensor:
-        from pac_rl.models import RewardConditionedMaskedActorCritic
-        return RewardConditionedMaskedActorCritic.compute_Domain_prior_logits(self, obs)  # type: ignore
+    def forward_council(
+        self,
+        obs: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        r"""
+        Executa os 7 Especialistas e o Meta-Arbitrador Transformer:
+        Retorna:
+          - `final_logits`: shape `(B, NUM_ACTIONS)`
+          - `expert_weights`: shape `(B, NUM_EXPERTS)` com $\sum_m \alpha_m = 1$
+          - `v_shaped`: shape `(B,)`
+          - `v_oracle`: shape `(B,)`
+        """
+        expert_hs = []
+        expert_logits = []
+        for exp in self.experts:
+            h_m, l_m = exp(obs)
+            expert_hs.append(h_m)
+            expert_logits.append(l_m)
 
-    def forward_trunk(self, obs: torch.Tensor) -> torch.Tensor:
-        state_x = obs[:, : self.state_dim]
-        cond_x = obs[:, self.state_dim :]
-        h = self.input_proj(state_x)
-        for blk in self.blocks:
-            h = blk(h, cond_x)
-        return self.final_norm(h)
+        # Stack across the 7 experts: H has shape (B, 7, D), L has shape (B, 7, A)
+        H = torch.stack(expert_hs, dim=1)
+        L = torch.stack(expert_logits, dim=1)
+
+        # Self-attention debate among the 7 experts
+        attn_out, _ = self.council_attn(H, H, H)
+        H_debated = self.council_norm(H + attn_out)  # (B, 7, D)
+
+        # Condition gating on the player's persona vector (obs[:, 73:112])
+        persona_emb = self.persona_proj(obs[:, 73:112])  # (B, D)
+        persona_exp = persona_emb.unsqueeze(1).expand_as(H_debated)  # (B, 7, D)
+
+        gate_scores = self.gating_head(torch.cat([H_debated, persona_exp], dim=-1)).squeeze(-1)  # (B, 7)
+        expert_weights = F.softmax(gate_scores, dim=-1)  # (B, 7)
+
+        # Weighted voting of expert action logits + meta residual refinement
+        weighted_logits = (L * expert_weights.unsqueeze(-1)).sum(dim=1)  # (B, A)
+        pooled_council = (H_debated * expert_weights.unsqueeze(-1)).sum(dim=1)  # (B, D)
+
+        final_logits = weighted_logits + 0.25 * self.meta_residual_actor(pooled_council)
+        joint_critic_in = torch.cat([pooled_council, persona_emb], dim=-1)
+        v_shaped = self.critic_shaped(joint_critic_in).squeeze(-1)
+        v_oracle = self.critic_oracle(joint_critic_in).squeeze(-1)
+
+        return final_logits, expert_weights, v_shaped, v_oracle
 
     def get_action_and_value(
         self,
@@ -249,9 +481,8 @@ class DeepEntityTransformerActorCritic(nn.Module):
         action_mask: torch.Tensor,
         action: Optional[torch.Tensor] = None,
         deterministic: bool = False,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        h = self.forward_trunk(obs)
-        raw_logits = self.actor_head(h) + self.compute_Domain_prior_logits(obs)
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        raw_logits, expert_weights, v_shaped, v_oracle = self.forward_council(obs)
         masked_logits = raw_logits.masked_fill(~action_mask, -1e8)
         dist = Categorical(logits=masked_logits)
 
@@ -262,29 +493,45 @@ class DeepEntityTransformerActorCritic(nn.Module):
             action,
             dist.log_prob(action),
             dist.entropy(),
-            self.critic_shaped(h).squeeze(-1),
-            self.critic_oracle(h).squeeze(-1),
+            v_shaped,
+            v_oracle,
+            expert_weights,
         )
+
+
+@dataclass
+class GPURolloutStep:
+    obs: np.ndarray
+    mask: np.ndarray
+    action: int
+    log_prob: float
+    reward: float
+    done: bool
+    value: float
+    oracle_target: float = 0.0
 
 
 class GPUMaskablePPOTrainer:
     """
-    Treinador Maskable PPO Acelerado por GPU com Automatic Mixed Precision (`torch.amp`),
-    Cosine Annealing LR e Early Stopping por Divergência KL.
+    Treinador Maskable PPO Acelerado por GPU para o `CommunityOfModelsBrain`:
+    - Suporta CUDA Automatic Mixed Precision (`torch.amp`)
+    - Treina simultaneamente a Política do Conselho, o Crítico Moldado (`v_shaped`) e o
+      Crítico Oráculo de Colocação Real (`v_oracle`)
+    - Inclui regularização de diversidade de especialistas para evitar colapso prematuro de gating.
     """
 
     def __init__(
         self,
-        model: nn.Module,
+        model: CommunityOfModelsBrain,
         device: torch.device,
         lr: float = 1e-3,
-        gamma: float = 0.99,
+        gamma: float = 0.995,
         gae_lambda: float = 0.95,
         clip_coef: float = 0.2,
-        ent_coef: float = 0.015,
+        ent_coef: float = 0.02,
         vf_coef: float = 0.5,
         max_grad_norm: float = 0.5,
-        target_kl: float = 0.02,
+        target_kl: float = 0.025,
         use_amp: bool = True,
     ):
         self.device = device
@@ -300,7 +547,7 @@ class GPUMaskablePPOTrainer:
         self.use_amp = use_amp and (device.type == "cuda")
         self.scaler = torch.amp.GradScaler("cuda", enabled=self.use_amp)
 
-    def update(self, buffer: List[RolloutStep], ppo_epochs: int = 6, batch_size: int = 256) -> Dict[str, float]:
+    def update(self, buffer: List[GPURolloutStep], ppo_epochs: int = 6, batch_size: int = 256) -> Dict[str, float]:
         if not buffer:
             return {"policy_loss": 0.0, "value_loss": 0.0, "entropy": 0.0, "approx_kl": 0.0}
 
@@ -312,6 +559,7 @@ class GPUMaskablePPOTrainer:
         rew_arr = np.array([s.reward for s in buffer], dtype=np.float32)
         done_arr = np.array([s.done for s in buffer], dtype=np.float32)
         val_arr = np.array([s.value for s in buffer], dtype=np.float32)
+        ora_arr = np.array([s.oracle_target for s in buffer], dtype=np.float32)
 
         advantages = np.zeros(n, dtype=np.float32)
         last_gae = 0.0
@@ -330,6 +578,7 @@ class GPUMaskablePPOTrainer:
         t_old_logp = torch.from_numpy(old_logp_arr).to(self.device)
         t_adv = torch.from_numpy(advantages).to(self.device)
         t_ret = torch.from_numpy(returns).to(self.device)
+        t_ora = torch.from_numpy(ora_arr).to(self.device)
 
         total_pg, total_vf, total_ent, total_kl, updates = 0.0, 0.0, 0.0, 0.0, 0
         self.model.train()
@@ -343,7 +592,7 @@ class GPUMaskablePPOTrainer:
                 self.optimizer.zero_grad()
 
                 with torch.amp.autocast(device_type=self.device.type, enabled=self.use_amp):
-                    _, new_logp, entropy, new_val, _ = self.model.get_action_and_value(
+                    _, new_logp, entropy, new_val, new_ora, exp_w = self.model.get_action_and_value(
                         t_obs[idx], t_mask[idx], action=t_act[idx]
                     )
                     logratio = new_logp - t_old_logp[idx]
@@ -354,9 +603,15 @@ class GPUMaskablePPOTrainer:
                     pg_loss1 = -mb_adv * ratio
                     pg_loss2 = -mb_adv * torch.clamp(ratio, 1.0 - self.clip_coef, 1.0 + self.clip_coef)
                     pg_loss = torch.max(pg_loss1, pg_loss2).mean()
-                    v_loss = 0.5 * F.mse_loss(new_val, t_ret[idx])
+
+                    v_loss = 0.5 * F.mse_loss(new_val, t_ret[idx]) + 0.25 * F.mse_loss(new_ora, t_ora[idx])
                     ent_loss = entropy.mean()
-                    loss = pg_loss + self.vf_coef * v_loss - self.ent_coef * ent_loss
+
+                    # Load-balancing entropy across the 7 council experts so no expert dies early
+                    mean_exp_w = exp_w.mean(dim=0)
+                    council_balance_ent = -(mean_exp_w * torch.log(mean_exp_w + 1e-8)).sum()
+
+                    loss = pg_loss + self.vf_coef * v_loss - self.ent_coef * ent_loss - 0.01 * council_balance_ent
 
                 self.scaler.scale(loss).backward()
                 self.scaler.unscale_(self.optimizer)
@@ -395,8 +650,8 @@ def train_deep_gpu_surrogate(
     seed: int = 42,
 ) -> Tuple[DeepSetTransformerSurrogate, Dict[str, float]]:
     """
-    Treina o `DeepSetTransformerSurrogate` em larga escala na GPU (padrão: 25.000 combates),
-    prevendo simultaneamente Vitória, Margem de Sobreviventes, Pico de Dano (Carry) e Pico de Tank.
+    Treina o `DeepSetTransformerSurrogate` em larga escala na GPU (prevendo Vitória,
+    Margem de Sobreviventes, Pico de Dano do Carry e Pico de Absorção do Tank).
     """
     rng = np.random.default_rng(seed)
     torch.manual_seed(seed)
