@@ -50,6 +50,18 @@ class BoardUnit:
     x: int = 0  # 0..5 column
     y: int = 0  # 0..3 row on board (y=0,1 backline, y=2,3 frontline)
     num_items: int = 0
+    species_id: int = 0
+    family: str = ""
+
+    @property
+    def is_frontline_tank(self) -> bool:
+        ehp = self.hp * (1.0 + ARMOR_FACTOR * (self.defense + self.spe_def))
+        return self.attack_range <= 1 and (ehp >= 210.0 * self.stars or (self.defense + self.spe_def) >= 12.0)
+
+    @property
+    def is_backline_carry(self) -> bool:
+        dps_proxy = self.atk * (0.45 + 0.011 * self.speed)
+        return self.attack_range >= 2 or dps_proxy >= 14.0 * self.stars
 
     @classmethod
     def from_pokemon_stats(
@@ -75,6 +87,8 @@ class BoardUnit:
             x=x,
             y=y,
             num_items=num_items,
+            species_id=int(getattr(p, "species_id", 0)),
+            family=str(getattr(p, "family", p.name)),
         )
 
 

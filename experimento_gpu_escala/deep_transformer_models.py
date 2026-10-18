@@ -39,10 +39,11 @@ from pac_rl.data_loader import NUM_SYNERGIES, PACDataRepository, PokemonSpec
 from pac_rl.gym_env import NUM_ACTIONS
 
 
-# Dimensão expandida da observação para a Comunidade de Modelos (180 features, com
-# suporte retrocompatível automático para 126 [87 base + 39 persona] ou 156 features)
-GPU_OBS_DIM = 180
+# Dimensão expandida da observação para a Comunidade de Modelos (188 features, incluindo
+# 8 features explícitas de Carry/Tank e identidade de Tabuleiro/Banco nos slots 180..187)
+GPU_OBS_DIM = 188
 CUSTOM_126_OBS_DIM = 126
+TOTAL_IDENTITY_SLOTS = 23  # 6 Shop + 9 Board + 8 Bench
 
 EXPERT_NAMES = [
     "Economist_Compound_Expert",
@@ -402,13 +403,16 @@ class CommunityOfModelsBrain(nn.Module):
     - `MetaArbitratorTransformer`: Faz Self-Attention entre as propostas dos 7 especialistas
       condicionado pela Persona $\mathbf{w}^{(k)}$ do agente e gera os pesos de voto
       $\boldsymbol{\alpha}(s) \in \Delta^6$ ($\sum_{m=1}^7 \alpha_m(s) = 1.0$).
+    - **Slice Explícito de Persona (`persona_range=(73, 112)`)**:
+      Recebe explicitamente no construtor o intervalo `(start, end)` dos 39 números da persona,
+      evitando adivinhação pela dimensão (`obs[73:112]` tanto no layout 126 quanto no 188).
     - **Tronco de Crítico Desacoplado (`detach_critic_trunk=True`)**:
       Os críticos (`critic_shaped` e `critic_oracle`) possuem seu próprio extrator `critic_trunk`
       e recebem `pooled_council.detach()` para que o MSE do crítico NUNCA destrua os logits
       clonados (BC) ou o gating dos 7 especialistas!
-    - **Codificador de Identidade de Unidade Opcional (`species_embedding`)**:
-      Permite passar IDs inteiros das espécies na loja (`shop_species_ids`, shape `(B, 6)`)
-      além dos atributos de papel tático (Tank vs Carry) no vetor `obs`.
+    - **Codificador de Identidade de Unidade em Loja + Tabuleiro + Banco (`species_embedding`)**:
+      Codifica os IDs alfabéticos compartilhados (`data/species_vocab.json`) dos 23 slots
+      (`6 loja + 9 tabuleiro + 8 banco`, ou `6 loja` com zero-padding automático).
     """
 
     def __init__(
@@ -417,26 +421,34 @@ class CommunityOfModelsBrain(nn.Module):
         num_actions: int = NUM_ACTIONS,
         expert_dim: int = 128,
         nhead: int = 4,
+        persona_range: Tuple[int, int] = (73, 112),
         detach_critic_trunk: bool = True,
         num_species_vocab: int = 1150,
         species_emb_dim: int = 16,
     ):
         super().__init__()
+        if persona_range[1] - persona_range[0] != 39:
+            raise ValueError(f"persona_range deve ter tamanho exato 39, recebido: {persona_range}")
         self.obs_dim = obs_dim
         self.num_actions = num_actions
         self.expert_dim = expert_dim
+        self.persona_range = persona_range
         self.detach_critic_trunk = detach_critic_trunk
+        self.num_species_vocab = num_species_vocab
+        self.species_emb_dim = species_emb_dim
 
-        # Embedding opcional de espécie (para identificar exatamente qual Pokémon está em cada slot da loja)
+        # Embedding compartilhado de espécie para Loja (6), Tabuleiro (9, mean+max pool) e Banco (8):
+        # 6*emb (shop slots) + 2*emb (board mean+max pool) + 8*emb (bench slots) = 16 * species_emb_dim
         self.species_embedding = nn.Embedding(num_species_vocab, species_emb_dim, padding_idx=0)
-        self.shop_id_proj = nn.Linear(6 * species_emb_dim, expert_dim)
+        self.unit_id_actor_proj = nn.Linear(16 * species_emb_dim, expert_dim)
+        self.unit_id_critic_proj = nn.Linear(16 * species_emb_dim, expert_dim)
 
         # Os 7 Sub-Agentes Especialistas (Política / Ator)
         self.experts = nn.ModuleList(
             [SubAgentExpertModule(obs_dim, expert_dim, num_actions) for _ in range(NUM_EXPERTS)]
         )
 
-        # Codificador da Persona / Objetivo do Jogador (39 dims: slice [73:112] ou últimos 39 no layout 126)
+        # Codificador da Persona / Objetivo do Jogador (39 dims lidos de self.persona_range)
         self.persona_proj = nn.Sequential(
             nn.Linear(39, expert_dim),
             nn.LayerNorm(expert_dim),
@@ -483,19 +495,48 @@ class CommunityOfModelsBrain(nn.Module):
 
     def _extract_persona_slice(self, obs: torch.Tensor) -> torch.Tensor:
         """
-        Extrai o vetor de 39 números da persona de forma compatível tanto com o layout de 126
-        números do motor externo (`obs[:, 87:126]`) quanto com o layout expandido (`obs[:, 73:112]`).
+        Extrai os 39 números da persona usando o intervalo explícito `self.persona_range`
+        configurado no construtor (por padrão `(73, 112)` tanto para 126 quanto para 188 dims).
         """
-        if obs.shape[-1] == 126:
-            return obs[:, 87:126]
-        return obs[:, 73:112]
+        start, end = self.persona_range
+        return obs[:, start:end]
+
+    def _encode_unit_identities(self, unit_species_ids: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Codifica as identidades de espécies da Loja (6), Tabuleiro (9) e Banco (8).
+        Aceita shape `(B, 23)` completo `[shop(6), board(9), bench(8)]` ou `(B, 6)` apenas da loja.
+        """
+        ids = unit_species_ids.long().clamp(0, self.num_species_vocab - 1)
+        bsz = ids.shape[0]
+        if ids.shape[1] < TOTAL_IDENTITY_SLOTS:
+            pad = torch.zeros(
+                (bsz, TOTAL_IDENTITY_SLOTS - ids.shape[1]),
+                dtype=ids.dtype,
+                device=ids.device,
+            )
+            ids = torch.cat([ids, pad], dim=1)
+        elif ids.shape[1] > TOTAL_IDENTITY_SLOTS:
+            ids = ids[:, :TOTAL_IDENTITY_SLOTS]
+
+        emb = self.species_embedding(ids)  # (B, 23, E)
+        shop_emb = emb[:, :6, :].flatten(start_dim=1)  # (B, 6*E)
+
+        board_ids = ids[:, 6:15]  # (B, 9)
+        board_emb = emb[:, 6:15, :]  # (B, 9, E)
+        board_mask = (board_ids > 0).unsqueeze(-1).float()  # (B, 9, 1)
+        board_mean = (board_emb * board_mask).sum(dim=1) / board_mask.sum(dim=1).clamp(min=1.0)
+        board_max = (board_emb * board_mask).max(dim=1).values
+
+        bench_emb = emb[:, 15:23, :].flatten(start_dim=1)  # (B, 8*E)
+        joint_id_feat = torch.cat([shop_emb, board_mean, board_max, bench_emb], dim=-1)  # (B, 16*E)
+        return self.unit_id_actor_proj(joint_id_feat), self.unit_id_critic_proj(joint_id_feat)
 
     def actor_parameters(self) -> List[nn.Parameter]:
-        """Retorna apenas os parâmetros do Ator (7 Especialistas + Arbitrador + Gating)."""
+        """Retorna apenas os parâmetros do Ator (7 Especialistas + Arbitrador + Gating + Identidade)."""
         params: List[nn.Parameter] = []
         for mod in (
             self.species_embedding,
-            self.shop_id_proj,
+            self.unit_id_actor_proj,
             self.experts,
             self.persona_proj,
             self.council_attn,
@@ -507,15 +548,16 @@ class CommunityOfModelsBrain(nn.Module):
         return params
 
     def critic_parameters(self) -> List[nn.Parameter]:
-        """Retorna apenas os parâmetros do Crítico (`critic_state_encoder`, `critic_shaped`, `critic_oracle`)."""
+        """Retorna apenas os parâmetros do Crítico (`critic_state_encoder`, `unit_id_critic_proj`, `critic_shaped`, `critic_oracle`)."""
         params: List[nn.Parameter] = []
-        for mod in (self.critic_state_encoder, self.critic_shaped, self.critic_oracle):
+        for mod in (self.critic_state_encoder, self.unit_id_critic_proj, self.critic_shaped, self.critic_oracle):
             params.extend(list(mod.parameters()))
         return params
 
     def forward_council(
         self,
         obs: torch.Tensor,
+        unit_species_ids: Optional[torch.Tensor] = None,
         shop_species_ids: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         r"""
@@ -526,6 +568,12 @@ class CommunityOfModelsBrain(nn.Module):
           - `v_shaped`: shape `(B,)`
           - `v_oracle`: shape `(B,)`
         """
+        ids_tensor = unit_species_ids if unit_species_ids is not None else shop_species_ids
+        actor_id_ctx: Optional[torch.Tensor] = None
+        critic_id_ctx: Optional[torch.Tensor] = None
+        if ids_tensor is not None:
+            actor_id_ctx, critic_id_ctx = self._encode_unit_identities(ids_tensor)
+
         expert_hs = []
         expert_logits = []
         for exp in self.experts:
@@ -535,16 +583,15 @@ class CommunityOfModelsBrain(nn.Module):
 
         # Stack across the 7 experts: H has shape (B, 7, D), L has shape (B, 7, A)
         H = torch.stack(expert_hs, dim=1)
-        if shop_species_ids is not None:
-            sp_emb = self.species_embedding(shop_species_ids.clamp(0, 1149)).flatten(start_dim=1)
-            H = H + self.shop_id_proj(sp_emb).unsqueeze(1)
+        if actor_id_ctx is not None:
+            H = H + actor_id_ctx.unsqueeze(1)
         L = torch.stack(expert_logits, dim=1)
 
         # Self-attention debate among the 7 experts
         attn_out, _ = self.council_attn(H, H, H)
         H_debated = self.council_norm(H + attn_out)  # (B, 7, D)
 
-        # Condition gating on the player's persona vector
+        # Condition gating on the player's persona vector (via explicit self.persona_range)
         persona_slice = self._extract_persona_slice(obs)
         persona_emb = self.persona_proj(persona_slice)  # (B, D)
         persona_exp = persona_emb.unsqueeze(1).expand_as(H_debated)  # (B, 7, D)
@@ -562,6 +609,8 @@ class CommunityOfModelsBrain(nn.Module):
         council_for_critic = pooled_council.detach() if self.detach_critic_trunk else pooled_council
         persona_for_critic = persona_emb.detach() if self.detach_critic_trunk else persona_emb
         critic_state_h = self.critic_state_encoder(obs)
+        if critic_id_ctx is not None:
+            critic_state_h = critic_state_h + (critic_id_ctx.detach() if self.detach_critic_trunk else critic_id_ctx)
         joint_critic_in = torch.cat([critic_state_h, council_for_critic, persona_for_critic], dim=-1)
 
         v_shaped = self.critic_shaped(joint_critic_in).squeeze(-1)
@@ -575,9 +624,14 @@ class CommunityOfModelsBrain(nn.Module):
         action_mask: torch.Tensor,
         action: Optional[torch.Tensor] = None,
         deterministic: bool = False,
+        unit_species_ids: Optional[torch.Tensor] = None,
         shop_species_ids: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        raw_logits, expert_weights, v_shaped, v_oracle = self.forward_council(obs, shop_species_ids=shop_species_ids)
+        raw_logits, expert_weights, v_shaped, v_oracle = self.forward_council(
+            obs,
+            unit_species_ids=unit_species_ids,
+            shop_species_ids=shop_species_ids,
+        )
         masked_logits = raw_logits.masked_fill(~action_mask, -1e8)
         dist = Categorical(logits=masked_logits)
 
@@ -605,6 +659,7 @@ class GPURolloutStep:
     value: float
     oracle_target: float = 0.0
     round_done: bool = False
+    unit_species_ids: Optional[np.ndarray] = None
 
 
 class GPUMaskablePPOTrainer:
@@ -725,6 +780,20 @@ class GPUMaskablePPOTrainer:
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
         return advantages, norm_returns, norm_ora
 
+    def _extract_unit_ids_tensor(self, buffer: List[GPURolloutStep]) -> Optional[torch.Tensor]:
+        if not buffer or buffer[0].unit_species_ids is None:
+            return None
+        ids_arr = np.array(
+            [
+                s.unit_species_ids
+                if s.unit_species_ids is not None
+                else np.zeros(TOTAL_IDENTITY_SLOTS, dtype=np.int64)
+                for s in buffer
+            ],
+            dtype=np.int64,
+        )
+        return torch.from_numpy(ids_arr).to(self.device)
+
     def warmup_critic_only(
         self,
         buffer: List[GPURolloutStep],
@@ -744,6 +813,7 @@ class GPUMaskablePPOTrainer:
         _, norm_returns, norm_ora = self._compute_gae_and_normalized_targets(buffer)
 
         t_obs = torch.from_numpy(obs_arr).to(self.device)
+        t_ids = self._extract_unit_ids_tensor(buffer)
         t_ret = torch.from_numpy(norm_returns).to(self.device)
         t_ora = torch.from_numpy(norm_ora).to(self.device)
 
@@ -756,7 +826,8 @@ class GPUMaskablePPOTrainer:
             for start in range(0, n, batch_size):
                 idx = perm[start : start + batch_size]
                 critic_opt.zero_grad()
-                _, _, v_sh, v_or = self.model.forward_council(t_obs[idx])
+                mb_ids = t_ids[idx] if t_ids is not None else None
+                _, _, v_sh, v_or = self.model.forward_council(t_obs[idx], unit_species_ids=mb_ids)
                 loss_v = F.smooth_l1_loss(v_sh, t_ret[idx]) + 0.5 * F.smooth_l1_loss(v_or, t_ora[idx])
                 loss_v.backward()
                 nn.utils.clip_grad_norm_(self.critic_params, self.max_grad_norm)
@@ -764,7 +835,7 @@ class GPUMaskablePPOTrainer:
                 last_loss = float(loss_v.item())
 
         with torch.no_grad():
-            _, _, v_pred_all, _ = self.model.forward_council(t_obs)
+            _, _, v_pred_all, _ = self.model.forward_council(t_obs, unit_species_ids=t_ids)
             y_true = t_ret.cpu().numpy()
             y_pred = v_pred_all.cpu().numpy()
             var_y = float(np.var(y_true))
@@ -786,6 +857,7 @@ class GPUMaskablePPOTrainer:
         advantages, norm_returns, norm_ora = self._compute_gae_and_normalized_targets(buffer)
 
         t_obs = torch.from_numpy(obs_arr).to(self.device)
+        t_ids = self._extract_unit_ids_tensor(buffer)
         t_mask = torch.from_numpy(mask_arr).to(self.device)
         t_act = torch.from_numpy(act_arr).to(self.device)
         t_old_logp = torch.from_numpy(old_logp_arr).to(self.device)
@@ -805,9 +877,12 @@ class GPUMaskablePPOTrainer:
             for start in range(0, n, batch_size):
                 idx = perm[start : start + batch_size]
                 self.optimizer.zero_grad()
+                mb_ids = t_ids[idx] if t_ids is not None else None
 
                 with torch.amp.autocast(device_type=self.device.type, enabled=self.use_amp):
-                    raw_logits, exp_w, new_val, new_ora = self.model.forward_council(t_obs[idx])
+                    raw_logits, exp_w, new_val, new_ora = self.model.forward_council(
+                        t_obs[idx], unit_species_ids=mb_ids
+                    )
                     masked_logits = raw_logits.masked_fill(~t_mask[idx], -1e8)
                     dist = Categorical(logits=masked_logits)
                     new_logp = dist.log_prob(t_act[idx])
@@ -855,7 +930,9 @@ class GPUMaskablePPOTrainer:
                     bc_kl_loss = torch.tensor(0.0, device=self.device)
                     if self.bc_anchor_model is not None and self.bc_kl_coef > 0.0:
                         with torch.no_grad():
-                            ref_logits, _, _, _ = self.bc_anchor_model.forward_council(t_obs[idx])
+                            ref_logits, _, _, _ = self.bc_anchor_model.forward_council(
+                                t_obs[idx], unit_species_ids=mb_ids
+                            )
                             ref_masked = ref_logits.masked_fill(~t_mask[idx], -1e8)
                             ref_probs = F.softmax(ref_masked, dim=-1)
                         cur_log_probs = F.log_softmax(masked_logits, dim=-1)
@@ -885,7 +962,7 @@ class GPUMaskablePPOTrainer:
                 updates += 1
 
         with torch.no_grad():
-            _, _, v_all, _ = self.model.forward_council(t_obs)
+            _, _, v_all, _ = self.model.forward_council(t_obs, unit_species_ids=t_ids)
             y_t = t_ret.cpu().numpy()
             y_p = v_all.cpu().numpy()
             ev = 1.0 - float(np.var(y_t - y_p)) / max(1e-6, float(np.var(y_t)))

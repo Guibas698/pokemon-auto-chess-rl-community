@@ -324,10 +324,8 @@ class PACDataRepository:
                 nb_stages=nb_stages,
                 regional=regional,
                 unit_power_score=self._compute_unit_power(cat, stars, nb_stages),
-                species_id=len(self.pokemons) + 1,
             )
             self.pokemons[name] = spec
-            self.species_to_id[name] = spec.species_id
             fam = spec.family
             if fam not in self.family_chains:
                 self.family_chains[fam] = {}
@@ -343,6 +341,23 @@ class PACDataRepository:
                 self.unique_pool.append(name)
             elif cat == "LEGENDARY" and not regional:
                 self.legendary_pool.append(name)
+
+        # Vocabulário canônico determinístico (nome ordenado alfabeticamente -> id 1..N, 0 = NONE/PAD)
+        # Garante que o treino em Python e o motor em TypeScript (TS) usem exatamente o mesmo mapa!
+        self.species_to_id = {"NONE": 0}
+        self.id_to_species: Dict[int, str] = {0: "NONE"}
+        for sorted_idx, p_name in enumerate(sorted(self.pokemons.keys()), start=1):
+            self.pokemons[p_name].species_id = sorted_idx
+            self.species_to_id[p_name] = sorted_idx
+            self.id_to_species[sorted_idx] = p_name
+
+        # Exporta data/species_vocab.json para leitura compartilhada entre Python e TypeScript
+        vocab_path = Path(__file__).resolve().parent.parent / "data" / "species_vocab.json"
+        if vocab_path.parent.exists() and not vocab_path.exists():
+            vocab_path.write_text(
+                json.dumps(self.species_to_id, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
 
         # Link evolution chains (Tier 1 -> Tier 2 -> Tier 3)
         for pkm in self.pokemons.values():

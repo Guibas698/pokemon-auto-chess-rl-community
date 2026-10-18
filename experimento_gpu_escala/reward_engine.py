@@ -206,15 +206,22 @@ class MultiScaleRewardEngine:
         unspent_gold_at_death: int,
         final_stage_reached: int = 22,
     ) -> float:
-        """
-        Recompensa Terminal Zero-Sum (1º ao 8º lugar) + Gradiente Contínuo de Sobrevivência
-        (fundamental contra lobbies Medium/Extreme onde o agente começa em 5º-8º) + Penalidade Anti-Hoarding.
+        r"""
+        Recompensa Terminal Zero-Sum (1º ao 8º lugar) + Tiebreaker Limitado de Sobrevivência
+        + Penalidade Anti-Hoarding.
+
+        Garantia de Dominância Estrita de Colocação:
+        - O menor degrau entre colocações adjacentes em `PLACEMENT_UTILITY` é `0.80`
+          (entre 3º [+1.40] e 4º [+0.60], ou entre 5º [-0.60] e 6º [-1.40]).
+        - `survival_margin` é limitado a `[-0.20, +0.25]` (`0.015 * (stage - 20)`),
+          cuja amplitude máxima (`0.45`) é estritamente menor que `0.80`. Assim, sobreviver
+          mais estágios desempata partidas de mesma colocação (ex.: dois 6º lugares), mas
+          JAMAIS supera subir uma posição no ranking!
         """
         base_util = PLACEMENT_UTILITY.get(placement, 0.0) * config.w_placement
-        # Diferencia morrer em 6º lugar no estágio 15 vs morrer em 6º lugar quase no Top-4 no estágio 29!
-        survival_margin = 0.07 * float(final_stage_reached - 20)
+        survival_margin = float(np.clip(0.015 * float(final_stage_reached - 20), -0.20, 0.25))
         hoarding_penalty = 0.0
         if placement >= 5 and unspent_gold_at_death >= 15:
-            # Morreu no Bottom-4 guardando ouro que deveria ter sido rolado!
-            hoarding_penalty = 0.06 * (unspent_gold_at_death - 10)
+            # Morreu no Bottom-4 guardando ouro que deveria ter sido rolado (limitado a 0.35)!
+            hoarding_penalty = min(0.35, 0.025 * (unspent_gold_at_death - 10))
         return float(base_util + survival_margin - hoarding_penalty)

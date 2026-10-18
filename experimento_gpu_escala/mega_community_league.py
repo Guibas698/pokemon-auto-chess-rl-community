@@ -69,7 +69,8 @@ from pac_rl.viper_distiller import DistilledHeuristicReport, MACRO_ACTION_NAMES,
 from .deep_transformer_models import (
     EXPERT_NAMES,
     GPU_OBS_DIM,
-     NUM_EXPERTS,
+    NUM_EXPERTS,
+    TOTAL_IDENTITY_SLOTS,
     CommunityOfModelsBrain,
     DeepSetTransformerSurrogate,
     GPUMaskablePPOTrainer,
@@ -109,6 +110,12 @@ GPU_FEATURE_NAMES = [
     "max_shop_lookahead_gain",
     "pair_upgrade_prob_in_pool",
     "target_synergy_contestedness",
+    "primary_carry_stars",
+    "primary_carry_copies",
+    "primary_carry_items",
+    "primary_carry_complete",
+    "primary_tank_stars",
+    "board_bench_upgrade_pairs",
 ]
 
 
@@ -423,6 +430,22 @@ class MegaCommunityLeagueTrainer:
                 mask[ACT_SELL_0 + i] = True
         return mask
 
+    def _extract_unit_species_ids(self, seat: SeatPlayerState) -> np.ndarray:
+        """
+        Extrai os IDs de espécies (vocabulário compartilhado ordenado A-Z `data/species_vocab.json`)
+        dos 23 slots: `shop[0..5]` (6) + `board[0..8]` (9) + `bench[0..7]` (8).
+        """
+        ids = np.zeros(TOTAL_IDENTITY_SLOTS, dtype=np.int64)
+        for i in range(min(6, len(seat.shop))):
+            p = seat.shop[i]
+            if p is not None:
+                ids[i] = int(p.species_id)
+        for i in range(min(9, len(seat.board))):
+            ids[6 + i] = int(seat.board[i].species_id)
+        for i in range(min(8, len(seat.bench))):
+            ids[15 + i] = int(seat.bench[i].species_id)
+        return ids
+
     def _extract_gpu_features_and_obs(
         self,
         seat: SeatPlayerState,
@@ -449,6 +472,38 @@ class MegaCommunityLeagueTrainer:
         target_idx = SYNERGY_TO_IDX.get(config.target_synergy, 0) if config.target_synergy else 0
         target_contested = float(scouting.synergy_contestedness[target_idx])
 
+        # Identifica o Carry Principal, o Tank Principal e pares aguardando evolução (Board + Bench)
+        all_roster = seat.board + seat.bench
+        family_copies: Dict[str, int] = {}
+        for u in all_roster:
+            fam_key = u.family or u.name
+            copy_weight = 1 if u.stars == 1 else (3 if u.stars == 2 else 9)
+            family_copies[fam_key] = family_copies.get(fam_key, 0) + copy_weight
+
+        upgrade_pairs_waiting = sum(1 for u in all_roster if self._count_copies(seat, u.name) >= 2) // 2
+
+        if seat.board:
+            primary_carry = max(
+                seat.board,
+                key=lambda u: (1.25 if u.is_backline_carry else 1.0)
+                * (u.atk * max(0.5, u.speed / 50.0) * (1.0 + 0.55 * (u.stars - 1)) * (1.0 + 0.25 * u.num_items)),
+            )
+            primary_tank = max(
+                seat.board,
+                key=lambda u: (1.25 if u.is_frontline_tank else 1.0)
+                * (u.hp * (1.0 + 0.04 * (u.defense + u.spe_def)) * (1.0 + 0.55 * (u.stars - 1))),
+            )
+            carry_sp_id = float(primary_carry.species_id)
+            carry_stars = float(primary_carry.stars)
+            carry_copies = float(family_copies.get(primary_carry.family or primary_carry.name, 1))
+            carry_items = float(primary_carry.num_items)
+            carry_complete = 1.0 if (primary_carry.stars >= 3 or (primary_carry.stars >= 2 and primary_carry.num_items >= 2)) else 0.0
+            tank_sp_id = float(primary_tank.species_id)
+            tank_stars = float(primary_tank.stars)
+        else:
+            carry_sp_id, carry_stars, carry_copies, carry_items, carry_complete = 0.0, 0.0, 0.0, 0.0, 0.0
+            tank_sp_id, tank_stars = 0.0, 0.0
+
         xp_to_next = max(0, EXP_TABLE.get(seat.level, 72) - seat.xp)
         feats = {
             "stage_level": float(stage_level),
@@ -473,6 +528,12 @@ class MegaCommunityLeagueTrainer:
             "max_shop_lookahead_gain": float(np.max(seat.last_shop_deltas)),
             "pair_upgrade_prob_in_pool": float(max_pair_prob),
             "target_synergy_contestedness": target_contested,
+            "primary_carry_stars": carry_stars,
+            "primary_carry_copies": carry_copies,
+            "primary_carry_items": carry_items,
+            "primary_carry_complete": carry_complete,
+            "primary_tank_stars": tank_stars,
+            "board_bench_upgrade_pairs": float(upgrade_pairs_waiting),
         }
 
         obs = np.zeros(GPU_OBS_DIM, dtype=np.float32)
@@ -535,6 +596,16 @@ class MegaCommunityLeagueTrainer:
         obs[153] = min(3.0, scouting.max_opponent_board_power / 35.0)
         obs[154] = scouting.lobby_physical_vs_magic_ratio
         obs[155] = scouting.backline_carry_vulnerability
+
+        # 180..187: Features de Carry Completo, Frontline Tank e Pares Tabuleiro+Banco (Estágios 15–18+)
+        obs[180] = carry_sp_id / 1100.0
+        obs[181] = carry_stars / 3.0
+        obs[182] = min(9.0, carry_copies) / 9.0
+        obs[183] = min(3.0, carry_items) / 3.0
+        obs[184] = carry_complete
+        obs[185] = tank_sp_id / 1100.0
+        obs[186] = tank_stars / 3.0
+        obs[187] = min(5.0, float(upgrade_pairs_waiting)) / 5.0
 
         return feats, obs
 
@@ -640,13 +711,15 @@ class MegaCommunityLeagueTrainer:
 
                 for _ in range(self.max_actions_per_stage):
                     _, obs = self._extract_gpu_features_and_obs(s, ag.config, stage, scouting)
+                    unit_ids = self._extract_unit_species_ids(s)
                     mask = self._build_action_mask(s)
 
                     with torch.no_grad():
                         t_obs = torch.from_numpy(obs).unsqueeze(0).to(self.device)
+                        t_ids = torch.from_numpy(unit_ids).unsqueeze(0).to(self.device)
                         t_mask = torch.from_numpy(mask).unsqueeze(0).to(self.device)
                         act_t, logp_t, _, val_t, _, exp_w_t = ag.model.get_action_and_value(
-                            t_obs, t_mask, deterministic=deterministic
+                            t_obs, t_mask, deterministic=deterministic, unit_species_ids=t_ids
                         )
                         action = int(act_t.item())
                         log_prob = float(logp_t.item())
@@ -734,6 +807,7 @@ class MegaCommunityLeagueTrainer:
                                 reward=micro_r,
                                 done=False,
                                 value=value,
+                                unit_species_ids=unit_ids,
                             )
                         )
 
@@ -1066,12 +1140,14 @@ class MegaCommunityLeagueTrainer:
                     seat.last_shop_deltas = deltas
 
                     feats, obs = self._extract_gpu_features_and_obs(seat, ag.config, stage, scouting)
+                    unit_ids = self._extract_unit_species_ids(seat)
                     mask = self._build_action_mask(seat)
 
                     with torch.no_grad():
                         t_obs = torch.from_numpy(obs).unsqueeze(0).to(self.device)
+                        t_ids = torch.from_numpy(unit_ids).unsqueeze(0).to(self.device)
                         t_mask = torch.from_numpy(mask).unsqueeze(0).to(self.device)
-                        logits, _, _, _ = ag.model.forward_council(t_obs)
+                        logits, _, _, _ = ag.model.forward_council(t_obs, unit_species_ids=t_ids)
                         masked_l = logits.masked_fill(~t_mask, -1e8).squeeze(0)
                         best_act = int(torch.argmax(masked_l).item())
                         valid_l = masked_l[t_mask.squeeze(0)].cpu().numpy()
