@@ -231,11 +231,31 @@ class FastCombatSimulator:
                 atk_mult += 0.14 * active_tiers["ARTIFICIAL"]
                 hp_mult += 0.10 * active_tiers["ARTIFICIAL"]
 
-            # Item scaling
+            # Item scaling (Shiny items already filtered out when disable_shiny_items=True)
             item_mult = 1.0 + 0.15 * u.num_items
             max_hp = u.hp * hp_mult * item_mult
             is_assassin = "DARK" in u_types
             y_pos = 0.5 if is_assassin else float(u.y)
+
+            # Starting shield from STEEL / ROCK / ARTIFICIAL / NORMAL synergies
+            shield_ratio = (
+                0.12 * active_tiers.get("STEEL", 0) * (1.5 if "STEEL" in u_types else 0.5)
+                + 0.10 * active_tiers.get("ROCK", 0) * (1.5 if "ROCK" in u_types else 0.5)
+                + 0.10 * active_tiers.get("ARTIFICIAL", 0) * (1.2 if "ARTIFICIAL" in u_types else 0.3)
+            )
+            starting_shield = max_hp * min(0.65, shield_ratio)
+
+            # Determine ability archetype from unit types and range
+            if u_types & {"GRASS", "FLORA", "GOURMET", "FAIRY", "LIGHT"}:
+                spell_type = "HEAL_AND_MAGIC"
+            elif u_types & {"ICE", "PSYCHIC", "GHOST", "WATER", "ROCK", "SOUND"}:
+                spell_type = "AOE_CC"
+            elif u_types & {"FIRE", "DRAGON", "ELECTRIC", "GROUND", "FLYING"}:
+                spell_type = "AOE_NUKE"
+            else:
+                spell_type = "SINGLE_STRIKE"
+
+            electric_multi_chance = 0.12 * active_tiers.get("ELECTRIC", 0) if "ELECTRIC" in u_types else 0.0
 
             combat_units.append({
                 "id": idx,
@@ -245,6 +265,7 @@ class FastCombatSimulator:
                 "types": tuple(u.types),
                 "hp": max_hp,
                 "max_hp": max_hp,
+                "shield": starting_shield,
                 "atk": u.atk * atk_mult * item_mult,
                 "def": u.defense + def_add + 3.0 * u.num_items,
                 "spe_def": u.spe_def + spedef_add + 3.0 * u.num_items,
@@ -256,7 +277,9 @@ class FastCombatSimulator:
                 "y": y_pos,
                 "regen": team_regen,
                 "pp_mult": team_pp_mult,
-                "spell_mult": team_spell_mult * item_mult,
+                "spell_mult": team_spell_mult * item_mult * (1.0 + 0.18 * (u.stars - 1)),
+                "spell_type": spell_type,
+                "electric_multi": electric_multi_chance,
                 "lifesteal": team_lifesteal,
                 "crit_chance": min(0.85, crit_chance),
                 "crit_mult": crit_mult,
@@ -264,12 +287,42 @@ class FastCombatSimulator:
                 "true_dmg": min(0.50, true_dmg_ratio),
                 "is_assassin": is_assassin,
                 "cooldown": 0.0,
+                "stun_timer": 0.0,
+                "burn_dps": 0.0,
                 "damage_dealt": 0.0,
-                "damage_tanked": 0.0,
+                "damage_tanked": starting_shield,
                 "spells_cast": 0,
                 "kills": 0,
             })
         return combat_units
+
+    @staticmethod
+    def _deal_damage_to_unit(attacker: Dict[str, object], target: Dict[str, object], raw_dmg: float, is_magic: bool) -> float:
+        def_key = "spe_def" if is_magic else "def"
+        defense_stat = float(target[def_key])
+        mitigation = 1.0 / (1.0 + ARMOR_FACTOR * max(0.0, defense_stat))
+        true_part = raw_dmg * float(attacker["true_dmg"])
+        mitigated_part = raw_dmg * (1.0 - float(attacker["true_dmg"])) * mitigation
+        final_dmg = max(1.0, true_part + mitigated_part)
+
+        # Absorb with shield first, then HP
+        sh = float(target["shield"])
+        if sh > 0.0:
+            absorbed_sh = min(sh, final_dmg)
+            target["shield"] = sh - absorbed_sh
+            rem_dmg = final_dmg - absorbed_sh
+        else:
+            rem_dmg = final_dmg
+
+        was_alive = float(target["hp"]) > 0.0
+        target["hp"] = float(target["hp"]) - rem_dmg
+        attacker["damage_dealt"] = float(attacker["damage_dealt"]) + final_dmg
+        target["damage_tanked"] = float(target["damage_tanked"]) + raw_dmg
+        target["pp"] = float(target["pp"]) + 5.0 * float(target["pp_mult"])
+
+        if was_alive and float(target["hp"]) <= 0.0:
+            attacker["kills"] = int(attacker["kills"]) + 1
+        return final_dmg
 
     def simulate(
         self,
@@ -311,31 +364,52 @@ class FastCombatSimulator:
                 for u in allies:
                     if float(u["hp"]) <= 0.0 or not enemies:
                         continue
+
+                    # Periodic regen & burn ticks
                     if float(u["regen"]) > 0.0:
                         healed = min(float(u["max_hp"]) - float(u["hp"]), float(u["regen"]) * dt)
                         u["hp"] = float(u["hp"]) + healed
                         u["damage_tanked"] = float(u["damage_tanked"]) + max(0.0, healed)
+                    if float(u["burn_dps"]) > 0.0:
+                        u["hp"] = float(u["hp"]) - float(u["burn_dps"]) * dt
+                        if float(u["hp"]) <= 0.0:
+                            continue
+
+                    # Crowd Control (Stun / Freeze) check
+                    if float(u["stun_timer"]) > 0.0:
+                        u["stun_timer"] = max(0.0, float(u["stun_timer"]) - dt)
+                        continue
 
                     u["cooldown"] = float(u["cooldown"]) - dt
                     if float(u["cooldown"]) > 0.0:
                         continue
 
                     best_target = None
-                    best_dist = 1e9
+                    best_cheb_dist = 1e9
+                    best_manh_dist = 1e9
                     for e in enemies:
                         if float(e["hp"]) <= 0.0:
                             continue
-                        dist = abs(float(u["x"]) - float(e["x"])) + abs(float(u["y"]) - float(e["y"]))
-                        if dist < best_dist:
-                            best_dist = dist
+                        dx = abs(float(u["x"]) - float(e["x"]))
+                        dy = abs(float(u["y"]) - float(e["y"]))
+                        cheb = max(dx, dy)
+                        manh = dx + dy
+                        if (cheb < best_cheb_dist) or (cheb == best_cheb_dist and manh < best_manh_dist):
+                            best_cheb_dist = cheb
+                            best_manh_dist = manh
                             best_target = e
 
                     if best_target is None:
                         continue
 
-                    if best_dist > float(u["range"]) + 0.5:
-                        step_y = 1.0 if float(best_target["y"]) > float(u["y"]) else -1.0
-                        u["y"] = float(u["y"]) + 0.8 * step_y
+                    # True 2D movement in both X and Y when target is outside Chebyshev attack range!
+                    if best_cheb_dist > float(u["range"]) + 0.35:
+                        dx_raw = float(best_target["x"]) - float(u["x"])
+                        dy_raw = float(best_target["y"]) - float(u["y"])
+                        if abs(dx_raw) > 0.25:
+                            u["x"] = float(u["x"]) + 0.85 * (1.0 if dx_raw > 0 else -1.0)
+                        if abs(dy_raw) > 0.25:
+                            u["y"] = float(u["y"]) + 0.85 * (1.0 if dy_raw > 0 else -1.0)
                         u["cooldown"] = 0.25
                         continue
 
@@ -347,34 +421,54 @@ class FastCombatSimulator:
                         continue
 
                     u["pp"] = float(u["pp"]) + 12.0 * float(u["pp_mult"])
-                    best_target["pp"] = float(best_target["pp"]) + 5.0 * float(best_target["pp_mult"])
 
                     is_spell = float(u["pp"]) >= float(u["max_pp"])
                     if is_spell:
                         u["pp"] = float(u["pp"]) - float(u["max_pp"])
                         u["spells_cast"] = int(u["spells_cast"]) + 1
-                        raw_dmg = float(u["atk"]) * 2.15 * float(u["spell_mult"])
-                        defense_stat = float(best_target["spe_def"])
+                        s_type = str(u["spell_type"])
+                        base_spell_dmg = (float(u["atk"]) * 1.90 + 22.0 * float(u["stars"])) * float(u["spell_mult"])
+
+                        if s_type == "HEAL_AND_MAGIC":
+                            # Heal lowest HP ratio ally + deal magic damage to target
+                            wounded = min(allies, key=lambda a: float(a["hp"]) / max(1.0, float(a["max_hp"])))
+                            heal_amt = min(float(wounded["max_hp"]) - float(wounded["hp"]), base_spell_dmg * 0.55)
+                            wounded["hp"] = float(wounded["hp"]) + max(0.0, heal_amt)
+                            wounded["damage_tanked"] = float(wounded["damage_tanked"]) + max(0.0, heal_amt)
+                            final_dmg = self._deal_damage_to_unit(u, best_target, base_spell_dmg * 0.85, is_magic=True)
+                        elif s_type in ("AOE_CC", "AOE_NUKE"):
+                            # Hit primary target + up to 2 nearby enemies within Chebyshev radius 2.0
+                            nearby = [
+                                e for e in enemies
+                                if float(e["hp"]) > 0.0
+                                and max(abs(float(e["x"]) - float(best_target["x"])), abs(float(e["y"]) - float(best_target["y"]))) <= 2.2
+                            ][:3]
+                            final_dmg = 0.0
+                            mult_aoe = 0.72 if len(nearby) > 1 else 1.0
+                            for e_hit in nearby:
+                                d_hit = self._deal_damage_to_unit(u, e_hit, base_spell_dmg * mult_aoe, is_magic=True)
+                                final_dmg += d_hit
+                                if s_type == "AOE_CC":
+                                    e_hit["stun_timer"] = max(float(e_hit["stun_timer"]), 0.75)
+                                if "FIRE" in u["types"]:
+                                    e_hit["burn_dps"] = max(float(e_hit["burn_dps"]), 0.03 * float(e_hit["max_hp"]))
+                        else:
+                            # Single-target execute / nuke (can crit if DARK/FIGHTING)
+                            if rng.random() < float(u["crit_chance"]):
+                                base_spell_dmg *= 1.35
+                            final_dmg = self._deal_damage_to_unit(u, best_target, base_spell_dmg * 1.15, is_magic=True)
                     else:
-                        raw_dmg = float(u["atk"])
-                        if rng.random() < float(u["crit_chance"]):
-                            raw_dmg *= float(u["crit_mult"])
-                        defense_stat = float(best_target["def"])
+                        n_strikes = 2 if (float(u["electric_multi"]) > 0.0 and rng.random() < float(u["electric_multi"])) else 1
+                        final_dmg = 0.0
+                        for _ in range(n_strikes):
+                            if float(best_target["hp"]) <= 0.0:
+                                break
+                            raw_dmg = float(u["atk"])
+                            if rng.random() < float(u["crit_chance"]):
+                                raw_dmg *= float(u["crit_mult"])
+                            final_dmg += self._deal_damage_to_unit(u, best_target, raw_dmg, is_magic=False)
 
-                    mitigation = 1.0 / (1.0 + ARMOR_FACTOR * max(0.0, defense_stat))
-                    true_part = raw_dmg * float(u["true_dmg"])
-                    mitigated_part = raw_dmg * (1.0 - float(u["true_dmg"])) * mitigation
-                    final_dmg = max(1.0, true_part + mitigated_part)
-
-                    best_target["hp"] = float(best_target["hp"]) - final_dmg
-                    u["damage_dealt"] = float(u["damage_dealt"]) + final_dmg
-                    # Total damage tanked = actual damage absorbed + damage mitigated by armor/spe_def
-                    best_target["damage_tanked"] = float(best_target["damage_tanked"]) + raw_dmg
-
-                    if float(best_target["hp"]) <= 0.0:
-                        u["kills"] = int(u["kills"]) + 1
-
-                    if float(u["lifesteal"]) > 0.0:
+                    if float(u["lifesteal"]) > 0.0 and final_dmg > 0.0:
                         lifesteal_heal = final_dmg * float(u["lifesteal"])
                         u["hp"] = min(float(u["max_hp"]), float(u["hp"]) + lifesteal_heal)
                         u["damage_tanked"] = float(u["damage_tanked"]) + lifesteal_heal

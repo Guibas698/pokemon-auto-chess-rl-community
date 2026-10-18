@@ -39,8 +39,10 @@ from pac_rl.data_loader import NUM_SYNERGIES, PACDataRepository, PokemonSpec
 from pac_rl.gym_env import NUM_ACTIONS
 
 
-# Dimensão expandida da observação para a Comunidade de Modelos (156 features)
-GPU_OBS_DIM = 156
+# Dimensão expandida da observação para a Comunidade de Modelos (180 features, com
+# suporte retrocompatível automático para 126 [87 base + 39 persona] ou 156 features)
+GPU_OBS_DIM = 180
+CUSTOM_126_OBS_DIM = 126
 
 EXPERT_NAMES = [
     "Economist_Compound_Expert",
@@ -360,22 +362,53 @@ class SubAgentExpertModule(nn.Module):
         return h, logits
 
 
+class RunningReturnNormalizer:
+    r"""
+    Normalizador Welford Online (`RunningMeanStd`) para os retornos dos críticos (`v_shaped` e `v_oracle`).
+    Impede que retornos não-normalizados gerem gradientes 20x maiores que o `pg_loss` no tronco!
+    """
+
+    def __init__(self, epsilon: float = 1e-5, clip_range: float = 5.0):
+        self.mean: float = 0.0
+        self.var: float = 1.0
+        self.count: float = epsilon
+        self.clip_range: float = clip_range
+
+    def update(self, x: np.ndarray) -> None:
+        if x.size == 0:
+            return
+        batch_mean = float(np.mean(x))
+        batch_var = float(np.var(x))
+        batch_count = float(x.size)
+        delta = batch_mean - self.mean
+        tot_count = self.count + batch_count
+        new_mean = self.mean + delta * batch_count / tot_count
+        m_a = self.var * self.count
+        m_b = batch_var * batch_count
+        m2 = m_a + m_b + (delta ** 2) * self.count * batch_count / tot_count
+        self.mean = new_mean
+        self.var = max(1e-4, m2 / tot_count)
+        self.count = tot_count
+
+    def normalize(self, x: np.ndarray) -> np.ndarray:
+        std = float(np.sqrt(self.var) + 1e-6)
+        return np.clip((x - self.mean) / std, -self.clip_range, self.clip_range).astype(np.float32)
+
+
 class CommunityOfModelsBrain(nn.Module):
     r"""
     "Uma Comunidade de Modelos para Ser Um Player" (Hierarchical Mixture-of-Experts):
-    - 7 Sub-Modelos Especialistas (`EXPERT_NAMES`) analisam simultaneamente a partida:
-      1. `Economist_Compound_Expert` (Juros, Breakpoints 10g..50g, Curva de XP)
-      2. `WinStreak_Tempo_Expert` (Pressão de Tabuleiro, Nível Agressivo, Win Streak)
-      3. `LoseStreak_Cashout_Expert` (Economia Reversa Estágios 1..11 e Gatilho de All-In Cashout)
-      4. `HyperRoll_Evolution_Expert` (Probabilidade Hipergeométrica de Pares e Evoluções 3*)
-      5. `Synergy_Vertical_Expert` (Ativação de Limiares das 31 Sinergias)
-      6. `LobbyScout_Counter_Expert` (Scouting de Cartas Contestadas, Counters e Lookahead Surrogate)
-      7. `LateGame_Cap_Expert` (Transição Nível 8/9, Uniques Estágio 10 e Legendaries Estágio 20)
+    - 7 Sub-Modelos Especialistas (`EXPERT_NAMES`) analisam simultaneamente a partida.
     - `MetaArbitratorTransformer`: Faz Self-Attention entre as propostas dos 7 especialistas
       condicionado pela Persona $\mathbf{w}^{(k)}$ do agente e gera os pesos de voto
       $\boldsymbol{\alpha}(s) \in \Delta^6$ ($\sum_{m=1}^7 \alpha_m(s) = 1.0$).
-    - **ZERO Regras Hardcoded (`compute_Domain_prior_logits` removido!)**: Tudo é aprendido
-      por Reforço + Busca Lookahead.
+    - **Tronco de Crítico Desacoplado (`detach_critic_trunk=True`)**:
+      Os críticos (`critic_shaped` e `critic_oracle`) possuem seu próprio extrator `critic_trunk`
+      e recebem `pooled_council.detach()` para que o MSE do crítico NUNCA destrua os logits
+      clonados (BC) ou o gating dos 7 especialistas!
+    - **Codificador de Identidade de Unidade Opcional (`species_embedding`)**:
+      Permite passar IDs inteiros das espécies na loja (`shop_species_ids`, shape `(B, 6)`)
+      além dos atributos de papel tático (Tank vs Carry) no vetor `obs`.
     """
 
     def __init__(
@@ -384,18 +417,26 @@ class CommunityOfModelsBrain(nn.Module):
         num_actions: int = NUM_ACTIONS,
         expert_dim: int = 128,
         nhead: int = 4,
+        detach_critic_trunk: bool = True,
+        num_species_vocab: int = 1150,
+        species_emb_dim: int = 16,
     ):
         super().__init__()
         self.obs_dim = obs_dim
         self.num_actions = num_actions
         self.expert_dim = expert_dim
+        self.detach_critic_trunk = detach_critic_trunk
 
-        # Os 7 Sub-Agentes Especialistas
+        # Embedding opcional de espécie (para identificar exatamente qual Pokémon está em cada slot da loja)
+        self.species_embedding = nn.Embedding(num_species_vocab, species_emb_dim, padding_idx=0)
+        self.shop_id_proj = nn.Linear(6 * species_emb_dim, expert_dim)
+
+        # Os 7 Sub-Agentes Especialistas (Política / Ator)
         self.experts = nn.ModuleList(
             [SubAgentExpertModule(obs_dim, expert_dim, num_actions) for _ in range(NUM_EXPERTS)]
         )
 
-        # Codificador da Persona / Objetivo do Jogador (slice obs[:, 73:112])
+        # Codificador da Persona / Objetivo do Jogador (39 dims: slice [73:112] ou últimos 39 no layout 126)
         self.persona_proj = nn.Sequential(
             nn.Linear(39, expert_dim),
             nn.LayerNorm(expert_dim),
@@ -417,22 +458,65 @@ class CommunityOfModelsBrain(nn.Module):
             nn.Linear(expert_dim, 1),
         )
 
-        # Residual Meta-Policy & Twin Value Heads (Shaped Persona Critic + Oracle Placement Critic)
+        # Residual Meta-Policy
         self.meta_residual_actor = nn.Linear(expert_dim, num_actions)
+
+        # Tronco Dedicado e Desacoplado para os Críticos (evita interferência Ator-Crítico!)
+        self.critic_state_encoder = nn.Sequential(
+            nn.Linear(obs_dim, expert_dim),
+            nn.LayerNorm(expert_dim),
+            nn.GELU(),
+            nn.Linear(expert_dim, expert_dim),
+            nn.LayerNorm(expert_dim),
+            nn.GELU(),
+        )
         self.critic_shaped = nn.Sequential(
-            nn.Linear(expert_dim * 2, expert_dim),
+            nn.Linear(expert_dim * 3, expert_dim),
             nn.GELU(),
             nn.Linear(expert_dim, 1),
         )
         self.critic_oracle = nn.Sequential(
-            nn.Linear(expert_dim * 2, expert_dim),
+            nn.Linear(expert_dim * 3, expert_dim),
             nn.GELU(),
             nn.Linear(expert_dim, 1),
         )
 
+    def _extract_persona_slice(self, obs: torch.Tensor) -> torch.Tensor:
+        """
+        Extrai o vetor de 39 números da persona de forma compatível tanto com o layout de 126
+        números do motor externo (`obs[:, 87:126]`) quanto com o layout expandido (`obs[:, 73:112]`).
+        """
+        if obs.shape[-1] == 126:
+            return obs[:, 87:126]
+        return obs[:, 73:112]
+
+    def actor_parameters(self) -> List[nn.Parameter]:
+        """Retorna apenas os parâmetros do Ator (7 Especialistas + Arbitrador + Gating)."""
+        params: List[nn.Parameter] = []
+        for mod in (
+            self.species_embedding,
+            self.shop_id_proj,
+            self.experts,
+            self.persona_proj,
+            self.council_attn,
+            self.council_norm,
+            self.gating_head,
+            self.meta_residual_actor,
+        ):
+            params.extend(list(mod.parameters()))
+        return params
+
+    def critic_parameters(self) -> List[nn.Parameter]:
+        """Retorna apenas os parâmetros do Crítico (`critic_state_encoder`, `critic_shaped`, `critic_oracle`)."""
+        params: List[nn.Parameter] = []
+        for mod in (self.critic_state_encoder, self.critic_shaped, self.critic_oracle):
+            params.extend(list(mod.parameters()))
+        return params
+
     def forward_council(
         self,
         obs: torch.Tensor,
+        shop_species_ids: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         r"""
         Executa os 7 Especialistas e o Meta-Arbitrador Transformer:
@@ -451,14 +535,18 @@ class CommunityOfModelsBrain(nn.Module):
 
         # Stack across the 7 experts: H has shape (B, 7, D), L has shape (B, 7, A)
         H = torch.stack(expert_hs, dim=1)
+        if shop_species_ids is not None:
+            sp_emb = self.species_embedding(shop_species_ids.clamp(0, 1149)).flatten(start_dim=1)
+            H = H + self.shop_id_proj(sp_emb).unsqueeze(1)
         L = torch.stack(expert_logits, dim=1)
 
         # Self-attention debate among the 7 experts
         attn_out, _ = self.council_attn(H, H, H)
         H_debated = self.council_norm(H + attn_out)  # (B, 7, D)
 
-        # Condition gating on the player's persona vector (obs[:, 73:112])
-        persona_emb = self.persona_proj(obs[:, 73:112])  # (B, D)
+        # Condition gating on the player's persona vector
+        persona_slice = self._extract_persona_slice(obs)
+        persona_emb = self.persona_proj(persona_slice)  # (B, D)
         persona_exp = persona_emb.unsqueeze(1).expand_as(H_debated)  # (B, 7, D)
 
         gate_scores = self.gating_head(torch.cat([H_debated, persona_exp], dim=-1)).squeeze(-1)  # (B, 7)
@@ -469,7 +557,13 @@ class CommunityOfModelsBrain(nn.Module):
         pooled_council = (H_debated * expert_weights.unsqueeze(-1)).sum(dim=1)  # (B, D)
 
         final_logits = weighted_logits + 0.25 * self.meta_residual_actor(pooled_council)
-        joint_critic_in = torch.cat([pooled_council, persona_emb], dim=-1)
+
+        # Desacoplamento do Crítico: evita que gradientes grandes de MSE destruam a política clonada!
+        council_for_critic = pooled_council.detach() if self.detach_critic_trunk else pooled_council
+        persona_for_critic = persona_emb.detach() if self.detach_critic_trunk else persona_emb
+        critic_state_h = self.critic_state_encoder(obs)
+        joint_critic_in = torch.cat([critic_state_h, council_for_critic, persona_for_critic], dim=-1)
+
         v_shaped = self.critic_shaped(joint_critic_in).squeeze(-1)
         v_oracle = self.critic_oracle(joint_critic_in).squeeze(-1)
 
@@ -481,8 +575,9 @@ class CommunityOfModelsBrain(nn.Module):
         action_mask: torch.Tensor,
         action: Optional[torch.Tensor] = None,
         deterministic: bool = False,
+        shop_species_ids: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        raw_logits, expert_weights, v_shaped, v_oracle = self.forward_council(obs)
+        raw_logits, expert_weights, v_shaped, v_oracle = self.forward_council(obs, shop_species_ids=shop_species_ids)
         masked_logits = raw_logits.masked_fill(~action_mask, -1e8)
         dist = Categorical(logits=masked_logits)
 
@@ -509,126 +604,291 @@ class GPURolloutStep:
     done: bool
     value: float
     oracle_target: float = 0.0
+    round_done: bool = False
 
 
 class GPUMaskablePPOTrainer:
-    """
-    Treinador Maskable PPO Acelerado por GPU para o `CommunityOfModelsBrain`:
-    - Suporta CUDA Automatic Mixed Precision (`torch.amp`)
-    - Treina simultaneamente a Política do Conselho, o Crítico Moldado (`v_shaped`) e o
-      Crítico Oráculo de Colocação Real (`v_oracle`)
-    - Inclui regularização de diversidade de especialistas para evitar colapso prematuro de gating.
+    r"""
+    Treinador Maskable PPO de Segunda Geração para o `CommunityOfModelsBrain`
+    (Projetado especificamente para superar heurísticas clonadas via Behavioral Cloning):
+    1. **Protocolo de Aquecimento do Crítico (`warmup_critic_only`)**:
+       Treina exclusivamente `critic_state_encoder`, `critic_shaped` e `critic_oracle` com
+       os 7 especialistas congelados até atingir alta Variância Explicada ($R^2 \ge 0.65$).
+    2. **Normalização Online de Retornos (`RunningReturnNormalizer`) + Clipped Huber Value Loss**:
+       Normaliza `returns` e `oracle_target` para média 0 e variância 1, impedindo que a escala
+       do crítico esmague o gradiente da política.
+    3. **Âncora KL contra Política Clonada (`set_bc_reference_anchor`, estilo AlphaStar)**:
+       Mantém uma cópia congelada $\pi_{\text{BC}}$ pós-clonagem e penaliza desvios destrutivos
+       $\beta_{\text{KL}} D_{\text{KL}}(\pi_{\text{BC}}(\cdot|s) \,\|\, \pi_\theta(\cdot|s))$.
+    4. **Piso de Entropia (`entropy_floor = 0.32`) e Parada KL por Mini-Batch (`target_kl = 0.012`)**:
+       Em vez de empurrar cegamente a entropia para cima quando a vantagem é ruidosa, aplica
+       força de entropia APENAS se $\mathcal{H}(\pi) < \mathcal{H}_{\text{floor}}$, e interrompe
+       imediatamente no mini-batch se `approx_kl > 1.5 * target_kl`!
     """
 
     def __init__(
         self,
         model: CommunityOfModelsBrain,
         device: torch.device,
-        lr: float = 1e-3,
-        gamma: float = 0.995,
+        lr: float = 3e-4,
+        critic_lr: float = 1e-3,
+        gamma: float = 0.99,
         gae_lambda: float = 0.95,
-        clip_coef: float = 0.2,
-        ent_coef: float = 0.02,
+        clip_coef: float = 0.15,
+        ent_coef: float = 0.002,
+        entropy_floor: float = 0.32,
+        council_balance_coef: float = 0.001,
         vf_coef: float = 0.5,
+        bc_kl_coef: float = 0.04,
         max_grad_norm: float = 0.5,
-        target_kl: float = 0.025,
+        target_kl: float = 0.012,
+        normalize_returns: bool = True,
         use_amp: bool = True,
     ):
         self.device = device
         self.model = model.to(device)
-        self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr, weight_decay=1e-4)
+        self.actor_params = self.model.actor_parameters()
+        self.critic_params = self.model.critic_parameters()
+        self.optimizer = torch.optim.AdamW(
+            [
+                {"params": self.actor_params, "lr": lr, "weight_decay": 1e-4},
+                {"params": self.critic_params, "lr": critic_lr, "weight_decay": 1e-4},
+            ]
+        )
         self.gamma = gamma
         self.gae_lambda = gae_lambda
         self.clip_coef = clip_coef
         self.ent_coef = ent_coef
+        self.entropy_floor = entropy_floor
+        self.council_balance_coef = council_balance_coef
         self.vf_coef = vf_coef
+        self.bc_kl_coef = bc_kl_coef
         self.max_grad_norm = max_grad_norm
         self.target_kl = target_kl
+        self.normalize_returns = normalize_returns
+        self.ret_norm = RunningReturnNormalizer()
+        self.ora_norm = RunningReturnNormalizer()
+        self.bc_anchor_model: Optional[CommunityOfModelsBrain] = None
         self.use_amp = use_amp and (device.type == "cuda")
         self.scaler = torch.amp.GradScaler("cuda", enabled=self.use_amp)
 
-    def update(self, buffer: List[GPURolloutStep], ppo_epochs: int = 6, batch_size: int = 256) -> Dict[str, float]:
+    def set_bc_reference_anchor(self, bc_kl_coef: float = 0.04) -> None:
+        """
+        Chame este método imediatamente após terminar a Clonagem de Comportamento (BC)!
+        Congela uma cópia da política clonada para servir como Âncora de Confiança KL
+        durante o PPO, impedindo que vantagens ruidosas degradem a política de 86% de precisão.
+        """
+        import copy
+        self.bc_anchor_model = copy.deepcopy(self.model).to(self.device)
+        self.bc_anchor_model.eval()
+        for p in self.bc_anchor_model.parameters():
+            p.requires_grad = False
+        self.bc_kl_coef = bc_kl_coef
+        # Pós-BC, desativa pressão artificial de uniformidade entre especialistas
+        self.council_balance_coef = 0.0
+
+    def _compute_gae_and_normalized_targets(
+        self,
+        buffer: List[GPURolloutStep],
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        n = len(buffer)
+        rew_arr = np.array([s.reward for s in buffer], dtype=np.float32)
+        done_arr = np.array([s.done for s in buffer], dtype=np.float32)
+        val_arr = np.array([s.value for s in buffer], dtype=np.float32)
+        ora_arr = np.array([s.oracle_target for s in buffer], dtype=np.float32)
+
+        # Se os retornos são normalizados, desnormaliza `val_arr` para calcular TD-error na escala real da recompensa
+        if self.normalize_returns and self.ret_norm.count > 10:
+            val_real = val_arr * float(np.sqrt(self.ret_norm.var) + 1e-6) + self.ret_norm.mean
+        else:
+            val_real = val_arr
+
+        advantages = np.zeros(n, dtype=np.float32)
+        last_gae = 0.0
+        for t in reversed(range(n)):
+            next_non_terminal = 1.0 - done_arr[t]
+            next_val = val_real[t + 1] if t + 1 < n else 0.0
+            delta = rew_arr[t] + self.gamma * next_val * next_non_terminal - val_real[t]
+            last_gae = delta + self.gamma * self.gae_lambda * next_non_terminal * last_gae
+            advantages[t] = last_gae
+
+        raw_returns = advantages + val_real
+        if self.normalize_returns:
+            self.ret_norm.update(raw_returns)
+            self.ora_norm.update(ora_arr)
+            norm_returns = self.ret_norm.normalize(raw_returns)
+            norm_ora = self.ora_norm.normalize(ora_arr)
+        else:
+            norm_returns = raw_returns
+            norm_ora = ora_arr
+
+        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        return advantages, norm_returns, norm_ora
+
+    def warmup_critic_only(
+        self,
+        buffer: List[GPURolloutStep],
+        warmup_epochs: int = 12,
+        batch_size: int = 256,
+    ) -> Dict[str, float]:
+        """
+        Fase 1.5 (Entre a Clonagem BC e o PPO):
+        Congela 100% da política (os 7 Especialistas + Gating) e treina exclusivamente os
+        críticos (`v_shaped` e `v_oracle`) até estabilizar a Variância Explicada ($R^2$).
+        """
         if not buffer:
-            return {"policy_loss": 0.0, "value_loss": 0.0, "entropy": 0.0, "approx_kl": 0.0}
+            return {"critic_loss": 0.0, "explained_variance": 0.0}
+
+        n = len(buffer)
+        obs_arr = np.array([s.obs for s in buffer], dtype=np.float32)
+        _, norm_returns, norm_ora = self._compute_gae_and_normalized_targets(buffer)
+
+        t_obs = torch.from_numpy(obs_arr).to(self.device)
+        t_ret = torch.from_numpy(norm_returns).to(self.device)
+        t_ora = torch.from_numpy(norm_ora).to(self.device)
+
+        critic_opt = torch.optim.AdamW(self.critic_params, lr=1.5e-3, weight_decay=1e-4)
+        self.model.train()
+        last_loss = 0.0
+
+        for _ in range(warmup_epochs):
+            perm = torch.randperm(n, device=self.device)
+            for start in range(0, n, batch_size):
+                idx = perm[start : start + batch_size]
+                critic_opt.zero_grad()
+                _, _, v_sh, v_or = self.model.forward_council(t_obs[idx])
+                loss_v = F.smooth_l1_loss(v_sh, t_ret[idx]) + 0.5 * F.smooth_l1_loss(v_or, t_ora[idx])
+                loss_v.backward()
+                nn.utils.clip_grad_norm_(self.critic_params, self.max_grad_norm)
+                critic_opt.step()
+                last_loss = float(loss_v.item())
+
+        with torch.no_grad():
+            _, _, v_pred_all, _ = self.model.forward_council(t_obs)
+            y_true = t_ret.cpu().numpy()
+            y_pred = v_pred_all.cpu().numpy()
+            var_y = float(np.var(y_true))
+            ev = 1.0 - float(np.var(y_true - y_pred)) / max(1e-6, var_y)
+
+        return {"critic_loss": last_loss, "explained_variance": ev}
+
+    def update(self, buffer: List[GPURolloutStep], ppo_epochs: int = 4, batch_size: int = 256) -> Dict[str, float]:
+        if not buffer:
+            return {"policy_loss": 0.0, "value_loss": 0.0, "entropy": 0.0, "approx_kl": 0.0, "explained_var": 0.0}
 
         n = len(buffer)
         obs_arr = np.array([s.obs for s in buffer], dtype=np.float32)
         mask_arr = np.array([s.mask for s in buffer], dtype=bool)
         act_arr = np.array([s.action for s in buffer], dtype=np.int64)
         old_logp_arr = np.array([s.log_prob for s in buffer], dtype=np.float32)
-        rew_arr = np.array([s.reward for s in buffer], dtype=np.float32)
-        done_arr = np.array([s.done for s in buffer], dtype=np.float32)
-        val_arr = np.array([s.value for s in buffer], dtype=np.float32)
-        ora_arr = np.array([s.oracle_target for s in buffer], dtype=np.float32)
+        old_val_arr = np.array([s.value for s in buffer], dtype=np.float32)
 
-        advantages = np.zeros(n, dtype=np.float32)
-        last_gae = 0.0
-        for t in reversed(range(n)):
-            next_non_terminal = 1.0 - done_arr[t]
-            next_val = val_arr[t + 1] if t + 1 < n else 0.0
-            delta = rew_arr[t] + self.gamma * next_val * next_non_terminal - val_arr[t]
-            last_gae = delta + self.gamma * self.gae_lambda * next_non_terminal * last_gae
-            advantages[t] = last_gae
-        returns = advantages + val_arr
-        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        advantages, norm_returns, norm_ora = self._compute_gae_and_normalized_targets(buffer)
 
         t_obs = torch.from_numpy(obs_arr).to(self.device)
         t_mask = torch.from_numpy(mask_arr).to(self.device)
         t_act = torch.from_numpy(act_arr).to(self.device)
         t_old_logp = torch.from_numpy(old_logp_arr).to(self.device)
+        t_old_val = torch.from_numpy(old_val_arr).to(self.device)
         t_adv = torch.from_numpy(advantages).to(self.device)
-        t_ret = torch.from_numpy(returns).to(self.device)
-        t_ora = torch.from_numpy(ora_arr).to(self.device)
+        t_ret = torch.from_numpy(norm_returns).to(self.device)
+        t_ora = torch.from_numpy(norm_ora).to(self.device)
 
         total_pg, total_vf, total_ent, total_kl, updates = 0.0, 0.0, 0.0, 0.0, 0
+        early_stop_triggered = False
         self.model.train()
 
         for _ in range(ppo_epochs):
+            if early_stop_triggered:
+                break
             perm = torch.randperm(n, device=self.device)
-            epoch_kl = 0.0
-            epoch_batches = 0
             for start in range(0, n, batch_size):
                 idx = perm[start : start + batch_size]
                 self.optimizer.zero_grad()
 
                 with torch.amp.autocast(device_type=self.device.type, enabled=self.use_amp):
-                    _, new_logp, entropy, new_val, new_ora, exp_w = self.model.get_action_and_value(
-                        t_obs[idx], t_mask[idx], action=t_act[idx]
-                    )
+                    raw_logits, exp_w, new_val, new_ora = self.model.forward_council(t_obs[idx])
+                    masked_logits = raw_logits.masked_fill(~t_mask[idx], -1e8)
+                    dist = Categorical(logits=masked_logits)
+                    new_logp = dist.log_prob(t_act[idx])
+                    entropy = dist.entropy()
+
                     logratio = new_logp - t_old_logp[idx]
                     ratio = logratio.exp()
                     approx_kl = ((ratio - 1.0) - logratio).mean()
 
+                    # Parada imediata por Mini-Batch (após o 1º passo) se violar a região de confiança KL!
+                    if updates > 0 and float(approx_kl.item()) > 1.5 * self.target_kl:
+                        early_stop_triggered = True
+                        break
+
                     mb_adv = t_adv[idx]
+                    # Se houver âncora BC ativa, aplica filtro assimétrico suave nas vantagens negativas ruidosas
+                    if self.bc_anchor_model is not None:
+                        adv_weight = torch.where(mb_adv >= 0.0, torch.ones_like(mb_adv), 0.5 * torch.ones_like(mb_adv))
+                        mb_adv = mb_adv * adv_weight
+
                     pg_loss1 = -mb_adv * ratio
                     pg_loss2 = -mb_adv * torch.clamp(ratio, 1.0 - self.clip_coef, 1.0 + self.clip_coef)
                     pg_loss = torch.max(pg_loss1, pg_loss2).mean()
 
-                    v_loss = 0.5 * F.mse_loss(new_val, t_ret[idx]) + 0.25 * F.mse_loss(new_ora, t_ora[idx])
-                    ent_loss = entropy.mean()
+                    # Clipped Huber Value Loss (Smooth L1) sobre retornos normalizados
+                    v_pred_clipped = t_old_val[idx] + torch.clamp(
+                        new_val - t_old_val[idx], -self.clip_coef, self.clip_coef
+                    )
+                    v_loss_unclipped = F.smooth_l1_loss(new_val, t_ret[idx], reduction="none")
+                    v_loss_clipped = F.smooth_l1_loss(v_pred_clipped, t_ret[idx], reduction="none")
+                    v_loss_shaped = torch.max(v_loss_unclipped, v_loss_clipped).mean()
+                    v_loss_oracle = F.smooth_l1_loss(new_ora, t_ora[idx])
+                    v_loss = 0.5 * v_loss_shaped + 0.25 * v_loss_oracle
 
-                    # Load-balancing entropy across the 7 council experts so no expert dies early
+                    # Piso de Entropia (Entropy Floor): NUNCA empurra a entropia para cima se H >= entropy_floor!
+                    mean_ent = entropy.mean()
+                    ent_deficit = F.relu(self.entropy_floor - entropy)
+                    ent_Floor_penalty = (ent_deficit ** 2).mean()
+
+                    # Balanceamento suave dos 7 especialistas
                     mean_exp_w = exp_w.mean(dim=0)
                     council_balance_ent = -(mean_exp_w * torch.log(mean_exp_w + 1e-8)).sum()
 
-                    loss = pg_loss + self.vf_coef * v_loss - self.ent_coef * ent_loss - 0.01 * council_balance_ent
+                    # Âncora KL opcional em relação à política clonada (BC Reference Policy)
+                    bc_kl_loss = torch.tensor(0.0, device=self.device)
+                    if self.bc_anchor_model is not None and self.bc_kl_coef > 0.0:
+                        with torch.no_grad():
+                            ref_logits, _, _, _ = self.bc_anchor_model.forward_council(t_obs[idx])
+                            ref_masked = ref_logits.masked_fill(~t_mask[idx], -1e8)
+                            ref_probs = F.softmax(ref_masked, dim=-1)
+                        cur_log_probs = F.log_softmax(masked_logits, dim=-1)
+                        ref_log_probs = F.log_softmax(ref_masked, dim=-1)
+                        bc_kl_loss = (ref_probs * (ref_log_probs - cur_log_probs)).sum(dim=-1).mean()
+
+                    loss = (
+                        pg_loss
+                        + self.vf_coef * v_loss
+                        + self.ent_coef * ent_Floor_penalty
+                        + self.bc_kl_coef * bc_kl_loss
+                        - self.council_balance_coef * council_balance_ent
+                    )
 
                 self.scaler.scale(loss).backward()
                 self.scaler.unscale_(self.optimizer)
-                nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+                # Clipping de gradiente SEPARADO para Ator e Crítico!
+                nn.utils.clip_grad_norm_(self.actor_params, self.max_grad_norm)
+                nn.utils.clip_grad_norm_(self.critic_params, self.max_grad_norm)
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
 
                 total_pg += float(pg_loss.item())
                 total_vf += float(v_loss.item())
-                total_ent += float(ent_loss.item())
+                total_ent += float(mean_ent.item())
                 total_kl += float(approx_kl.item())
-                epoch_kl += float(approx_kl.item())
                 updates += 1
-                epoch_batches += 1
 
-            if epoch_batches > 0 and (epoch_kl / epoch_batches) > self.target_kl:
-                break
+        with torch.no_grad():
+            _, _, v_all, _ = self.model.forward_council(t_obs)
+            y_t = t_ret.cpu().numpy()
+            y_p = v_all.cpu().numpy()
+            ev = 1.0 - float(np.var(y_t - y_p)) / max(1e-6, float(np.var(y_t)))
 
         denom = max(1, updates)
         return {
@@ -636,6 +896,7 @@ class GPUMaskablePPOTrainer:
             "value_loss": total_vf / denom,
             "entropy": total_ent / denom,
             "approx_kl": total_kl / denom,
+            "explained_var": ev,
         }
 
 

@@ -266,8 +266,8 @@ def _export_current_snapshot(
             "Avg_Placement": round(last_m.avg_placement, 2) if last_m else 4.5,
             "Top4_Rate_%": round(last_m.top4_rate * 100.0, 1) if last_m else 50.0,
             "Win_Rate_%": round(last_m.win_rate * 100.0, 1) if last_m else 12.5,
-            "Avg_Bank_Gold": 46.0,
-            "Avg_Final_Level": 8.4,
+            "Avg_Bank_Gold": round(ag.avg_bank_gold, 1),
+            "Avg_Final_Level": round(ag.avg_final_level, 2),
             "Record_DPS_Unit": dps_str,
             "Record_Tank_Unit": tnk_str,
         })

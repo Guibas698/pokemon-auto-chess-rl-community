@@ -169,6 +169,8 @@ class GPUCommunityAgent:
         self.record_dps_unit: Tuple[str, float] = ("NONE", 0.0)
         self.record_tank_unit: Tuple[str, float] = ("NONE", 0.0)
         self.elo_rating: float = 1200.0
+        self.avg_bank_gold: float = 0.0
+        self.avg_final_level: float = 2.0
         # Telemetria de ativação dos 7 Especialistas por fase da partida: "early", "mid", "late"
         self.expert_votes_by_phase: Dict[str, List[np.ndarray]] = {
             "early": [],
@@ -395,7 +397,7 @@ class MegaCommunityLeagueTrainer:
         raw = sum((u.hp / 160.0 + u.atk / 14.0) * (1.0 + 0.65 * (u.stars - 1)) for u in board)
         return float(raw * mult)
 
-    def _build_action_mask(self, seat: SeatPlayerState) -> np.ndarray:
+    def _build_action_mask(self, seat: SeatPlayerState, cap_special_to_regular: bool = False) -> np.ndarray:
         mask = np.zeros(NUM_ACTIONS, dtype=bool)
         mask[ACT_END_TURN] = True
         if seat.actions_this_stage >= self.max_actions_per_stage:
@@ -404,7 +406,7 @@ class MegaCommunityLeagueTrainer:
         has_space = (len(seat.board) < seat.level) or (len(seat.bench) < 6)
         for i in range(SHOP_SIZE):
             p = seat.shop[i]
-            if p is not None and seat.gold >= p.cost:
+            if p is not None and seat.gold >= p.effective_shop_cost(cap_special_to_regular):
                 if has_space or self._count_copies(seat, p.name) >= 2:
                     mask[ACT_BUY_0 + i] = True
 
@@ -493,14 +495,28 @@ class MegaCommunityLeagueTrainer:
         obs[16] = feats["max_synergy_tier"] / 4.0
         obs[17] = feats["alive_opponents"] / 7.0
 
+        # Calcula o déficit atual de Frontline Tank vs Backline Carry no tabuleiro
+        n_board_tanks = sum(1 for u in seat.board if u.attack_range <= 1 and (u.defense + u.spe_def) >= 10.0)
+        n_board_carries = sum(1 for u in seat.board if u.attack_range >= 2 or u.atk >= 15.0 * u.stars)
+        needs_tank = 1.0 if n_board_tanks < max(1, len(seat.board) // 3) else 0.2
+        needs_carry = 1.0 if n_board_carries < max(1, len(seat.board) // 3) else 0.2
+
         for i in range(SHOP_SIZE):
             base = 18 + i * 4
+            id_base = 156 + i * 4
             p = seat.shop[i]
             if p is not None:
                 obs[base + 0] = 1.0
-                obs[base + 1] = p.cost / 5.0
+                obs[base + 1] = p.effective_shop_cost() / 5.0
                 obs[base + 2] = min(3, self._count_copies(seat, p.name)) / 2.0
                 obs[base + 3] = min(4.0, self._synergy_fit(seat, config, p)) / 3.0
+
+                # 156..179: Identidade de Unidade e Papel Tático (Tank vs Carry + Complementaridade)
+                obs[id_base + 0] = float(p.species_id) / 1100.0
+                obs[id_base + 1] = 1.0 if p.is_frontline_tank else 0.0
+                obs[id_base + 2] = 1.0 if p.is_backline_carry else 0.0
+                role_comp = (needs_tank if p.is_frontline_tank else 0.0) + (needs_carry if p.is_backline_carry else 0.0)
+                obs[id_base + 3] = min(1.5, role_comp)
 
         obs[42 : 42 + NUM_SYNERGIES] = encode_synergy_vector(active_tiers, counts)
         obs[73:112] = config.to_Condition_vector()
@@ -822,8 +838,11 @@ class MegaCommunityLeagueTrainer:
         for rank_idx, s in enumerate(ranked_seats):
             placement = rank_idx + 1
             ag = self.agents[s.agent_idx]
+            final_stg = s.eliminated_stage if not s.alive else 38
             oracle_val = PLACEMENT_UTILITY.get(placement, 0.0) / 4.0
-            term_r = self.reward_engine.compute_macro_terminal_reward(ag.config, placement, s.gold)
+            term_r = self.reward_engine.compute_macro_terminal_reward(
+                ag.config, placement, s.gold, final_stage_reached=final_stg
+            )
 
             if s.trajectory:
                 s.trajectory[-1].reward += term_r
@@ -839,7 +858,7 @@ class MegaCommunityLeagueTrainer:
             lobby_results[s.seat_idx] = {
                 "agent_idx": s.agent_idx,
                 "placement": placement,
-                "final_stage": s.eliminated_stage if not s.alive else 38,
+                "final_stage": final_stg,
                 "final_hp": s.hp,
                 "final_gold": s.gold,
                 "final_level": s.level,
@@ -878,6 +897,8 @@ class MegaCommunityLeagueTrainer:
         buffers_by_agent: Dict[int, List[GPURolloutStep]] = {i: [] for i in range(len(self.agents))}
         placements_by_agent: Dict[int, List[int]] = {i: [] for i in range(len(self.agents))}
         stages_by_agent: Dict[int, List[int]] = {i: [] for i in range(len(self.agents))}
+        golds_by_agent: Dict[int, List[int]] = {i: [] for i in range(len(self.agents))}
+        levels_by_agent: Dict[int, List[int]] = {i: [] for i in range(len(self.agents))}
         evos2_by_agent: Dict[int, List[int]] = {i: [] for i in range(len(self.agents))}
         evos3_by_agent: Dict[int, List[int]] = {i: [] for i in range(len(self.agents))}
         returns_by_agent: Dict[int, List[float]] = {i: [] for i in range(len(self.agents))}
@@ -902,6 +923,8 @@ class MegaCommunityLeagueTrainer:
                 buffers_by_agent[ag_i].extend(traj)
                 placements_by_agent[ag_i].append(seat_res["placement"])
                 stages_by_agent[ag_i].append(seat_res["final_stage"])
+                golds_by_agent[ag_i].append(seat_res["final_gold"])
+                levels_by_agent[ag_i].append(seat_res["final_level"])
                 evos2_by_agent[ag_i].append(seat_res["evolutions_2star"])
                 evos3_by_agent[ag_i].append(seat_res["evolutions_3star"])
                 returns_by_agent[ag_i].append(sum(st.reward for st in traj))
@@ -913,7 +936,15 @@ class MegaCommunityLeagueTrainer:
         gen_metrics: List[AgentMetrics] = []
         for ag_i, agent in enumerate(self.agents):
             if buffers_by_agent[ag_i]:
-                agent.trainer.update(buffers_by_agent[ag_i], ppo_epochs=6, batch_size=256)
+                if generation == 1:
+                    # Aquece o crítico antes da primeira atualização PPO!
+                    agent.trainer.warmup_critic_only(buffers_by_agent[ag_i], warmup_epochs=8, batch_size=256)
+                agent.trainer.update(buffers_by_agent[ag_i], ppo_epochs=4, batch_size=256)
+
+            if golds_by_agent[ag_i]:
+                agent.avg_bank_gold = float(np.mean(golds_by_agent[ag_i]))
+            if levels_by_agent[ag_i]:
+                agent.avg_final_level = float(np.mean(levels_by_agent[ag_i]))
 
             places = placements_by_agent[ag_i] or [4]
             avg_place = float(np.mean(places))

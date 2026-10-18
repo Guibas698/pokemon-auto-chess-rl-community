@@ -147,9 +147,14 @@ class MultiScaleRewardEngine:
 
         reward = 0.0
 
-        # 1. Resultado do combate e risco quadrático de HP
+        # 1. Resultado do combate, dano parcial em derrotas apertadas e risco quadrático de HP
+        enemy_logs = outcome.unit_logs_b if is_team_a else outcome.unit_logs_a
+        enemy_surv = outcome.surviving_b if is_team_a else outcome.surviving_a
+        enemy_total = max(1, len(enemy_logs))
+        enemy_killed_ratio = float(enemy_total - enemy_surv) / float(enemy_total)
+
         if won:
-            reward += 0.18 + 0.025 * surviving
+            reward += 0.25 + 0.035 * surviving
             if not is_pve:
                 reward += 0.22 * config.w_win_streak * (1.0 + 0.30 * min(5, win_streak))
                 # Bônus de Cashout Real: quebrou uma lose_streak >= 3 com uma vitória!
@@ -161,12 +166,19 @@ class MultiScaleRewardEngine:
             danger_mult = (1.0 + max(0.0, (100.0 - hp_after) / 55.0)) ** 2
             hp_penalty = 0.022 * dmg_taken * danger_mult * (0.4 + config.w_hp_preservation)
 
+            # Sinal denso contra oponentes Medium/Extreme: matar 5 de 6 peças inimigas é muito melhor que 0 de 6!
+            close_fight_credit = 0.14 * enemy_killed_ratio
+
             if not is_pve and stage_level <= 11 and hp_after >= 52 and config.w_lose_streak > 0.2:
                 # Lose streak intencional controlado no early game
                 interest_ok = 1.0 if gold_before_income >= 10 else 0.3
-                reward += 0.16 * config.w_lose_streak * (min(5, lose_streak) / 5.0) * interest_ok - 0.35 * hp_penalty
+                reward += (
+                    0.16 * config.w_lose_streak * (min(5, lose_streak) / 5.0) * interest_ok
+                    + close_fight_credit
+                    - 0.35 * hp_penalty
+                )
             else:
-                reward -= hp_penalty
+                reward += close_fight_credit - hp_penalty
 
         # 2. Eficiência de Juros Compostos (desativada se HP <= 25 para forçar all-in!)
         interest_earned = min(5, gold_before_income // 10)
@@ -192,13 +204,17 @@ class MultiScaleRewardEngine:
         config: RewardWeightConfig,
         placement: int,
         unspent_gold_at_death: int,
+        final_stage_reached: int = 22,
     ) -> float:
         """
-        Recompensa Terminal Zero-Sum (1º ao 8º lugar) + Penalidade Anti-Hoarding.
+        Recompensa Terminal Zero-Sum (1º ao 8º lugar) + Gradiente Contínuo de Sobrevivência
+        (fundamental contra lobbies Medium/Extreme onde o agente começa em 5º-8º) + Penalidade Anti-Hoarding.
         """
         base_util = PLACEMENT_UTILITY.get(placement, 0.0) * config.w_placement
+        # Diferencia morrer em 6º lugar no estágio 15 vs morrer em 6º lugar quase no Top-4 no estágio 29!
+        survival_margin = 0.07 * float(final_stage_reached - 20)
         hoarding_penalty = 0.0
         if placement >= 5 and unspent_gold_at_death >= 15:
             # Morreu no Bottom-4 guardando ouro que deveria ter sido rolado!
             hoarding_penalty = 0.06 * (unspent_gold_at_death - 10)
-        return float(base_util - hoarding_penalty)
+        return float(base_util + survival_margin - hoarding_penalty)

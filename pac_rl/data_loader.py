@@ -115,6 +115,24 @@ ADDITIONAL_PICKS_STAGES = [5, 8, 11]
 PORTAL_PROPOSITION_STAGES = {0: "COMMON", 10: "UNIQUE", 20: "LEGENDARY"}
 PORTAL_CAROUSEL_STAGES = [0, 10, 20]
 
+# Official ShinyItems from upstream/app/types/enum/Item.ts (lines 645-658)
+# High-variance 0.5% items excluded by default to eliminate heavy-tailed critic noise in RL
+SHINY_ITEMS = frozenset({
+    "DYNAMAX_BAND",
+    "SHINY_STONE",
+    "RARE_CANDY",
+    "EVIOLITE",
+    "GOLD_MASK",
+    "GOLD_BOTTLE_CAP",
+    "ABSORB_BULB",
+    "SACRED_ASH",
+    "STAR_PIECE",
+    "REPEAT_BALL",
+    "GOLD_BOW",
+    "RED_SCALE",
+})
+DISABLE_SHINY_ITEMS: bool = True
+
 # Native power evaluation tables from upstream/app/core/bot-logic.ts
 POWER_AVERAGES = [
     2, 2, 3, 4, 4.5, 5, 6, 7, 8, 9, 11, 11.5, 12, 13, 14, 15, 16, 17, 18, 19, 24,
@@ -144,6 +162,7 @@ class PokemonSpec:
     regional: bool
     next_evolution: Optional[str] = None
     unit_power_score: float = 1.0
+    species_id: int = 0
 
     @property
     def rarity(self) -> str:
@@ -156,6 +175,28 @@ class PokemonSpec:
     @property
     def cost(self) -> int:
         return RARITY_COST.get(self.category, 1)
+
+    def effective_shop_cost(self, cap_special_to_regular: bool = False) -> int:
+        """
+        Returns the gold cost to buy this unit in the shop.
+        If `cap_special_to_regular=True`, caps UNIQUE/LEGENDARY/HATCH to standard shop range (5g/6g)
+        when testing custom shop pools; otherwise returns exact RARITY_COST (1..5 for shop rarities,
+        10 for UNIQUE, 20 for LEGENDARY).
+        """
+        raw = RARITY_COST.get(self.category, 1)
+        return min(6, raw) if cap_special_to_regular else raw
+
+    @property
+    def is_frontline_tank(self) -> bool:
+        """True if unit has melee range and high effective HP/Armor profile."""
+        ehp = self.hp * (1.0 + ARMOR_FACTOR * (self.defense + self.spe_def))
+        return self.attack_range <= 1 and (ehp >= 210.0 * self.stars or (self.defense + self.spe_def) >= 12.0)
+
+    @property
+    def is_backline_carry(self) -> bool:
+        """True if unit is ranged or high-DPS offensive carry."""
+        dps_proxy = self.atk * (0.45 + 0.011 * self.speed)
+        return self.attack_range >= 2 or dps_proxy >= 14.0 * self.stars
 
 
 PokemonStats = PokemonSpec
@@ -180,11 +221,14 @@ class PACDataRepository:
     and the 726 community bots from upstream/db-commands/botv2.json.
     """
 
-    def __init__(self, upstream_dir: Optional[Path] = None):
+    def __init__(self, upstream_dir: Optional[Path] = None, disable_shiny_items: bool = DISABLE_SHINY_ITEMS):
         if upstream_dir is None:
             upstream_dir = Path(__file__).resolve().parent.parent / "upstream"
         self.upstream_dir = upstream_dir
+        self.disable_shiny_items = disable_shiny_items
+        self.shiny_items_removed_from_bots: int = 0
         self.pokemons: Dict[str, PokemonSpec] = {}
+        self.species_to_id: Dict[str, int] = {}
         self.family_chains: Dict[str, Dict[int, List[str]]] = {}
         self.regular_pool_tier1: Dict[str, List[str]] = {r: [] for r in SHOP_RARITIES}
         self.additional_pool_tier1: Dict[str, List[str]] = {"UNCOMMON": [], "RARE": [], "EPIC": []}
@@ -280,8 +324,10 @@ class PACDataRepository:
                 nb_stages=nb_stages,
                 regional=regional,
                 unit_power_score=self._compute_unit_power(cat, stars, nb_stages),
+                species_id=len(self.pokemons) + 1,
             )
             self.pokemons[name] = spec
+            self.species_to_id[name] = spec.species_id
             fam = spec.family
             if fam not in self.family_chains:
                 self.family_chains[fam] = {}
@@ -328,9 +374,14 @@ class PACDataRepository:
                 for unit in st.get("board", []):
                     uname = str(unit.get("name", ""))
                     if uname in self.pokemons and int(unit.get("y", 1)) > 0:
-                        items = unit.get("items", [])
+                        raw_items = [str(it).strip().upper() for it in unit.get("items", [])]
+                        if self.disable_shiny_items:
+                            filtered_items = [it for it in raw_items if it not in SHINY_ITEMS]
+                            self.shiny_items_removed_from_bots += len(raw_items) - len(filtered_items)
+                        else:
+                            filtered_items = raw_items
                         board_units.append(
-                            (uname, int(unit.get("x", 0)), int(unit.get("y", 1)), len(items))
+                            (uname, int(unit.get("x", 0)), int(unit.get("y", 1)), len(filtered_items))
                         )
                 for _ in range(rounds_req):
                     expanded_boards.append(board_units)
@@ -393,6 +444,8 @@ class PACDataRepository:
             "total_pokemon": len(self.pokemons),
             "num_synergies": NUM_SYNERGIES,
             "total_bots_loaded": len(self.bots),
+            "shiny_items_disabled": self.disable_shiny_items,
+            "shiny_items_removed_from_bots": self.shiny_items_removed_from_bots,
             "by_rarity": by_rarity,
         }
 
