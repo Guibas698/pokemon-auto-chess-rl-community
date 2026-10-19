@@ -23,6 +23,7 @@ Elimina TODOS os atalhos do experimento CPU:
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
@@ -124,6 +125,7 @@ class SeatPlayerState:
     """Estado completo de 1 dos 8 jogadores vivos dentro do Lobby Multi-Agente Compartilhado."""
     seat_idx: int
     agent_idx: int
+    is_historical_ghost: bool = False
     hp: int = 100
     gold: int = 6
     level: int = 2
@@ -139,6 +141,10 @@ class SeatPlayerState:
     evolutions_3star: int = 0
     items_held: int = 0
     phi_prev: float = 0.0
+    phi_initialized: bool = False
+    reward_micro_sum: float = 0.0
+    reward_meso_sum: float = 0.0
+    reward_macro_sum: float = 0.0
     last_surrogate_win_prob: float = 0.5
     last_shop_deltas: np.ndarray = field(default_factory=lambda: np.zeros(6, dtype=np.float32))
     board: List[BoardUnit] = field(default_factory=list)
@@ -158,7 +164,7 @@ class GPUCommunityAgent:
         config: RewardWeightConfig,
         device: torch.device,
         expert_dim: int = 128,
-        lr: float = 1e-3,
+        lr: float = 3e-4,
         seed: int = 42,
     ):
         torch.manual_seed(seed)
@@ -178,12 +184,55 @@ class GPUCommunityAgent:
         self.elo_rating: float = 1200.0
         self.avg_bank_gold: float = 0.0
         self.avg_final_level: float = 2.0
+        self.games_played: int = 0
+        self.critic_warmed_up: bool = False
+        self.last_ppo_metrics: Dict[str, float] = {
+            "policy_loss": 0.0,
+            "value_loss": 0.0,
+            "entropy": 0.0,
+            "approx_kl": 0.0,
+            "clip_fraction": 0.0,
+            "explained_var": 0.0,
+        }
         # Telemetria de ativação dos 7 Especialistas por fase da partida: "early", "mid", "late"
         self.expert_votes_by_phase: Dict[str, List[np.ndarray]] = {
             "early": [],
             "mid": [],
             "late": [],
         }
+
+    def state_dict(self) -> Dict[str, Any]:
+        return {
+            "config_name": self.config.name,
+            "model": self.model.state_dict(),
+            "trainer": self.trainer.state_dict(),
+            "elo_rating": float(self.elo_rating),
+            "avg_bank_gold": float(self.avg_bank_gold),
+            "avg_final_level": float(self.avg_final_level),
+            "games_played": int(self.games_played),
+            "critic_warmed_up": bool(self.critic_warmed_up),
+            "record_dps_unit": self.record_dps_unit,
+            "record_tank_unit": self.record_tank_unit,
+            "last_board_names": list(self.last_board_names),
+            "last_ppo_metrics": dict(self.last_ppo_metrics),
+        }
+
+    def load_state_dict(self, state: Dict[str, Any]) -> None:
+        self.model.load_state_dict(state["model"])
+        if "trainer" in state:
+            self.trainer.load_state_dict(state["trainer"])
+        self.elo_rating = float(state.get("elo_rating", 1200.0))
+        self.avg_bank_gold = float(state.get("avg_bank_gold", 0.0))
+        self.avg_final_level = float(state.get("avg_final_level", 2.0))
+        self.games_played = int(state.get("games_played", 0))
+        self.critic_warmed_up = bool(state.get("critic_warmed_up", False))
+        if "record_dps_unit" in state:
+            self.record_dps_unit = tuple(state["record_dps_unit"])  # type: ignore[assignment]
+        if "record_tank_unit" in state:
+            self.record_tank_unit = tuple(state["record_tank_unit"])  # type: ignore[assignment]
+        self.last_board_names = list(state.get("last_board_names", []))
+        if "last_ppo_metrics" in state:
+            self.last_ppo_metrics = dict(state["last_ppo_metrics"])
 
 
 def build_mega_35_agent_community(device: torch.device, seed: int = 42) -> List[GPUCommunityAgent]:
@@ -290,6 +339,12 @@ class MegaCommunityLeagueTrainer:
     """
     Treinador Multi-Agente Real com Self-Play em Baralho Compartilhado (`SharedCardPool`),
     Busca Clássica Lookahead (`NeuralLookaheadRosterPlanner`) e Motor de Recompensa Multi-Escala.
+
+    Suporta os 4 Modos Experimentais Controlados propostos na Auditoria Técnica:
+      - `ablation_mode="A"`: Baseline PPO corrigido (escala consistente, sem shaping micro, sem lookahead, sem PBT)
+      - `ablation_mode="B"`: + Potential-Based Reward Shaping contínuo (Ng 1999, gamma=0.99, Phi(s_T)=0)
+      - `ablation_mode="C"`: + Planejamento Neural Lookahead (`NeuralLookaheadRosterPlanner` sem mutação)
+      - `ablation_mode="D"`: Liga Completa com Self-Play PFSP, Snapshots Históricos, ELO Pareado e PBT filtrado
     """
 
     def __init__(
@@ -300,19 +355,51 @@ class MegaCommunityLeagueTrainer:
         device: Optional[torch.device] = None,
         agents: Optional[List[GPUCommunityAgent]] = None,
         max_actions_per_stage: int = 10,
+        ablation_mode: str = "D",
         seed: int = 42,
     ):
+        import copy
         self.repo = repo
         self.sim = sim
         self.device = device or get_optimal_device("auto")
         self.surrogate = surrogate.to(self.device)
         self.planner = NeuralLookaheadRosterPlanner(self.surrogate, self.device)
-        self.reward_engine = MultiScaleRewardEngine(gamma=0.995)
+        self.ablation_mode = ablation_mode.upper()
+        self.enable_micro_shaping = self.ablation_mode in ("B", "C", "D")
+        self.enable_lookahead = self.ablation_mode in ("C", "D")
+        self.enable_pbt = self.ablation_mode == "D"
+
+        micro_scale = 0.25 if self.enable_micro_shaping else 0.0
+        self.reward_engine = MultiScaleRewardEngine(gamma=0.99, micro_scale=micro_scale)
         self.shared_pool = SharedCardPool(repo)
-        self.agents = agents or build_mega_35_agent_community(self.device, seed=seed)
+        full_community = agents or build_mega_35_agent_community(self.device, seed=seed)
+        # Pool de Políticas Âncoras Congeladas (Geração 0) para Avaliação Estacionária e Modo A
+        self.frozen_anchor_models: List[CommunityOfModelsBrain] = []
+        for ag in full_community[:8]:
+            frozen_m = copy.deepcopy(ag.model).to(self.device)
+            frozen_m.eval()
+            for p in frozen_m.parameters():
+                p.requires_grad = False
+            self.frozen_anchor_models.append(frozen_m)
+
+        if agents is not None:
+            self.agents = agents
+        elif self.ablation_mode == "A":
+            # Modo A: Concentra todas as partidas em 4 agentes focais contra oponentes fixos congelados
+            self.agents = full_community[:4]
+        elif self.ablation_mode in ("B", "C"):
+            # Modos B e C: Concentra o Self-Play nos 8 arquétipos principais (100% de participação por lobby)
+            self.agents = full_community[:8]
+        else:
+            # Modo D: Liga Completa de 35 Agentes Comunitários
+            self.agents = full_community
+
         self.archive = MAPElitesArchive()
         self.max_actions_per_stage = max_actions_per_stage
         self.rng = np.random.default_rng(seed)
+        self.ppo_telemetry_log: List[Dict[str, Any]] = []
+        self.eval_benchmark_log: List[Dict[str, Any]] = []
+        self.historical_snapshots: List[Tuple[str, CommunityOfModelsBrain]] = []
 
     # ------------------------------------------------------------------------
     # Utilitários de Mecânica do Jogo no Lobby Compartilhado de 8 Jogadores
@@ -338,7 +425,7 @@ class MegaCommunityLeagueTrainer:
         new_u = BoardUnit.from_pokemon_stats(p, num_items=0)
         if len(seat.board) < seat.level:
             seat.board.append(new_u)
-            TacticalPositioner.optimize_positions(seat.board)
+            TacticalPositioner.optimize_positions(seat.board, in_place=True)
         elif len(seat.bench) < 6:
             seat.bench.append(new_u)
         elif self._count_copies(seat, p.name) >= 2:
@@ -391,7 +478,7 @@ class MegaCommunityLeagueTrainer:
                         seat.evolutions_3star += 1
                         highest_evo = max(highest_evo, 3)
 
-                    TacticalPositioner.optimize_positions(seat.board)
+                    TacticalPositioner.optimize_positions(seat.board, in_place=True)
                     changed = True
                     break
         return highest_evo
@@ -609,13 +696,32 @@ class MegaCommunityLeagueTrainer:
 
         return feats, obs
 
+    def _refresh_board_win_prob(self, s: SeatPlayerState, opp_boards: List[List[BoardUnit]]) -> None:
+        """
+        Recalcula imediatamente a probabilidade de vitória prevista pelo Surrogate
+        sempre que uma ação de compra, evolução ou deploy altera o tabuleiro.
+        """
+        if not self.enable_lookahead:
+            s.last_surrogate_win_prob = 0.5
+            return
+        if not s.board:
+            s.last_surrogate_win_prob = 0.0
+            return
+        if not opp_boards:
+            s.last_surrogate_win_prob = 0.5
+            return
+        pos_board = TacticalPositioner.optimize_positions(s.board)
+        s.last_surrogate_win_prob = float(self.planner._batch_eval_boards([pos_board], opp_boards)[0])
+
     def _sample_pfsp_lobby_agents(self, focal_idx: int) -> List[int]:
         """
         Prioritized Fictitious Self-Play (PFSP — estilo AlphaStar League):
-        Seleciona 8 agentes distintos da Liga Comunitária de 35 modelos para compor o lobby,
+        Seleciona 8 agentes distintos da Liga Comunitária para compor o lobby,
         priorizando oponentes com ELO próximo ou ligeiramente superior ao agente focal!
         """
         n_total = len(self.agents)
+        if n_total == 1:
+            return [0] * 8
         focal_elo = self.agents[focal_idx].elo_rating
         candidates = [i for i in range(n_total) if i != focal_idx]
 
@@ -625,6 +731,8 @@ class MegaCommunityLeagueTrainer:
         )
         weights /= weights.sum()
         picked = list(self.rng.choice(candidates, size=min(7, len(candidates)), replace=False, p=weights))
+        while len(picked) < 7:
+            picked.append(int(self.rng.choice(candidates)))
         return [focal_idx] + [int(x) for x in picked]
 
     def run_shared_pool_selfplay_lobby(
@@ -633,13 +741,14 @@ class MegaCommunityLeagueTrainer:
         collect_rollouts: bool = True,
         deterministic: bool = False,
         seed: int = 42,
+        seat_override_models: Optional[Dict[int, CommunityOfModelsBrain]] = None,
     ) -> Dict[int, Dict[str, Any]]:
         """
         Executa uma partida completa de 8 jogadores em Self-Play Real:
-        - Todos os 8 jogadores são instâncias de `GPUCommunityAgent` (`CommunityOfModelsBrain`).
+        - Todos os 8 jogadores são instâncias de `GPUCommunityAgent` (`CommunityOfModelsBrain`)
+          ou snapshots históricos/âncoras congeladas via `seat_override_models`.
         - Todos compram e devolvem cartas ao MESMO `SharedCardPool`.
-        - Todos usam `NeuralLookaheadRosterPlanner` (conectado ao `DeepSetTransformerSurrogate`)
-          e `LobbyScoutingAggregator`.
+        - Potencial Phi(s) contínuo entre estágios com subtração terminal exata Phi(s_terminal) = 0.
         """
         self.rng = np.random.default_rng(seed)
         self.shared_pool.reset()
@@ -648,7 +757,8 @@ class MegaCommunityLeagueTrainer:
         starters = self.repo.buyable_by_rarity.get("COMMON", [])
 
         for s_idx, ag_idx in enumerate(seat_agent_indices):
-            seat = SeatPlayerState(seat_idx=s_idx, agent_idx=ag_idx)
+            is_ghost = bool(seat_override_models and s_idx in seat_override_models)
+            seat = SeatPlayerState(seat_idx=s_idx, agent_idx=ag_idx, is_historical_ghost=is_ghost)
             cfg = self.agents[ag_idx].config
             if starters:
                 matching = [p for p in starters if cfg.target_synergy in p.types] if cfg.target_synergy else []
@@ -690,7 +800,12 @@ class MegaCommunityLeagueTrainer:
             # 2. Fase de Loja e Planejamento Lookahead para cada um dos 8 Agentes Vivos
             for s in alive_seats:
                 ag = self.agents[s.agent_idx]
-                ag.model.eval()
+                active_model = (
+                    seat_override_models[s.seat_idx]
+                    if (seat_override_models and s.seat_idx in seat_override_models)
+                    else ag.model
+                )
+                active_model.eval()
                 s.actions_this_stage = 0
                 s.locked_this_turn = False
 
@@ -699,15 +814,23 @@ class MegaCommunityLeagueTrainer:
                 opp_powers = [self._board_power(ob) for ob in opp_boards]
                 scouting = LobbyScoutingAggregator.scout_lobby(opp_boards, opp_hps, opp_powers)
 
-                # Avalia na GPU via DeepSetTransformerSurrogate o ganho marginal das 6 cartas da loja
-                base_wp, shop_deltas = self.planner.evaluate_shop_marginal_gains(
-                    s.board, s.shop, s.level, opp_boards
-                )
+                if self.enable_lookahead:
+                    base_wp, shop_deltas = self.planner.evaluate_shop_marginal_gains(
+                        s.board, s.shop, s.level, opp_boards
+                    )
+                else:
+                    base_wp = 0.5
+                    shop_deltas = np.zeros(6, dtype=np.float32)
+
                 s.last_surrogate_win_prob = base_wp
                 s.last_shop_deltas = shop_deltas
-                s.phi_prev = self.reward_engine.compute_potential_phi(
-                    ag.config, s.board, s.bench, s.gold, s.level, s.hp, base_wp, self.shared_pool, scouting
-                )
+
+                # Inicializa phi_prev apenas no primeiro estágio do episódio para manter a soma telescópica contínua!
+                if not s.phi_initialized:
+                    s.phi_prev = self.reward_engine.compute_potential_phi(
+                        ag.config, s.board, s.bench, s.gold, s.level, s.hp, base_wp, self.shared_pool, scouting
+                    )
+                    s.phi_initialized = True
 
                 for _ in range(self.max_actions_per_stage):
                     _, obs = self._extract_gpu_features_and_obs(s, ag.config, stage, scouting)
@@ -718,7 +841,7 @@ class MegaCommunityLeagueTrainer:
                         t_obs = torch.from_numpy(obs).unsqueeze(0).to(self.device)
                         t_ids = torch.from_numpy(unit_ids).unsqueeze(0).to(self.device)
                         t_mask = torch.from_numpy(mask).unsqueeze(0).to(self.device)
-                        act_t, logp_t, _, val_t, _, exp_w_t = ag.model.get_action_and_value(
+                        act_t, logp_t, _, val_t, _, exp_w_t = active_model.get_action_and_value(
                             t_obs, t_mask, deterministic=deterministic, unit_species_ids=t_ids
                         )
                         action = int(act_t.item())
@@ -726,22 +849,25 @@ class MegaCommunityLeagueTrainer:
                         value = float(val_t.item())
                         exp_w = exp_w_t.squeeze(0).cpu().numpy()
 
-                    if len(ag.expert_votes_by_phase[phase_key]) < 500:
+                    if not s.is_historical_ghost and len(ag.expert_votes_by_phase[phase_key]) < 500:
                         ag.expert_votes_by_phase[phase_key].append(exp_w)
 
                     if not mask[action]:
                         action = ACT_END_TURN
+
+                    board_changed = False
 
                     # Executa a micro-ação escolhida pelo Conselho de 7 Especialistas
                     if ACT_BUY_0 <= action <= ACT_BUY_5:
                         slot = action - ACT_BUY_0
                         p = s.shop[slot]
                         if p is not None and s.gold >= p.cost:
-                            added, _ = self._try_add_or_evolve(s, p)
+                            added, evolved = self._try_add_or_evolve(s, p)
                             if added:
                                 s.gold -= p.cost
                                 s.shop[slot] = None
                                 s.last_shop_deltas[slot] = 0.0
+                                board_changed = True
                         s.actions_this_stage += 1
 
                     elif action == ACT_REROLL:
@@ -749,9 +875,12 @@ class MegaCommunityLeagueTrainer:
                             s.gold -= 1
                             s.shop_locked = False
                             s.shop = self.shared_pool.sample_shop(s.level, self.rng)
-                            s.last_surrogate_win_prob, s.last_shop_deltas = self.planner.evaluate_shop_marginal_gains(
-                                s.board, s.shop, s.level, opp_boards
-                            )
+                            if self.enable_lookahead:
+                                s.last_surrogate_win_prob, s.last_shop_deltas = self.planner.evaluate_shop_marginal_gains(
+                                    s.board, s.shop, s.level, opp_boards
+                                )
+                            else:
+                                s.last_shop_deltas = np.zeros(6, dtype=np.float32)
                         s.actions_this_stage += 1
 
                     elif action == ACT_LEVEL_UP:
@@ -773,10 +902,15 @@ class MegaCommunityLeagueTrainer:
                         if b_idx < len(s.bench):
                             if len(s.board) < s.level:
                                 s.board.append(s.bench.pop(b_idx))
+                                board_changed = True
                             elif s.board:
-                                s.board, s.bench = self.planner.optimize_roster_with_surrogate(
-                                    s.board, s.bench, s.level, opp_boards
-                                )
+                                if self.enable_lookahead:
+                                    s.board, s.bench = self.planner.optimize_roster_with_surrogate(
+                                        s.board, s.bench, s.level, opp_boards
+                                    )
+                                else:
+                                    s.board[0], s.bench[b_idx] = s.bench[b_idx], s.board[0]
+                                board_changed = True
                         s.actions_this_stage += 1
 
                     elif ACT_SELL_0 <= action <= ACT_SELL_5:
@@ -790,14 +924,18 @@ class MegaCommunityLeagueTrainer:
                             s.gold += sell_val
                         s.actions_this_stage += 1
 
+                    if board_changed:
+                        self._refresh_board_win_prob(s, opp_boards)
+
                     # Potential-based micro shaping reward: gamma * Phi(s') - Phi(s)
                     phi_now = self.reward_engine.compute_potential_phi(
                         ag.config, s.board, s.bench, s.gold, s.level, s.hp, s.last_surrogate_win_prob, self.shared_pool, scouting
                     )
                     micro_r = self.reward_engine.compute_micro_shaping_reward(s.phi_prev, phi_now, done=False)
                     s.phi_prev = phi_now
+                    s.reward_micro_sum += micro_r
 
-                    if collect_rollouts:
+                    if collect_rollouts and not s.is_historical_ghost:
                         s.trajectory.append(
                             GPURolloutStep(
                                 obs=obs,
@@ -814,10 +952,13 @@ class MegaCommunityLeagueTrainer:
                     if action == ACT_END_TURN or s.actions_this_stage >= self.max_actions_per_stage:
                         break
 
-                # Antes do combate começar, aplica a busca combinatória 1-Step Lookahead com o SetTransformer!
-                s.board, s.bench = self.planner.optimize_roster_with_surrogate(
-                    s.board, s.bench, s.level, opp_boards
-                )
+                # Antes do combate começar, aplica a busca combinatória 1-Step Lookahead (se habilitada) ou posicionamento tático
+                if self.enable_lookahead:
+                    s.board, s.bench = self.planner.optimize_roster_with_surrogate(
+                        s.board, s.bench, s.level, opp_boards
+                    )
+                else:
+                    s.board = TacticalPositioner.optimize_positions(s.board)
 
             # 3. Fase de Combate Tático (PvE ou Pareamento Direto entre os Agentes Vivos do Lobby)
             is_pve = stage in PVE_STAGES
@@ -826,7 +967,8 @@ class MegaCommunityLeagueTrainer:
                 for s in alive_seats:
                     ag = self.agents[s.agent_idx]
                     out = self.sim.simulate(s.board, pve_wave, stage_level=stage, rng=self.rng)
-                    self._record_unit_telemetry(ag, out.unit_logs_a)
+                    if not s.is_historical_ghost:
+                        self._record_unit_telemetry(ag, out.unit_logs_a)
                     if out.winner >= 0:
                         s.items_held += 1
                         if s.board:
@@ -838,6 +980,7 @@ class MegaCommunityLeagueTrainer:
                     meso_r = self.reward_engine.compute_meso_round_reward(
                         ag.config, out, True, True, stage, s.hp, s.gold, s.win_streak, s.lose_streak, s.lose_streak
                     )
+                    s.reward_meso_sum += meso_r
                     if s.trajectory:
                         s.trajectory[-1].reward += meso_r
                     if s.hp == 0:
@@ -849,8 +992,10 @@ class MegaCommunityLeagueTrainer:
                     s1, s2 = shuffled[k_pair], shuffled[k_pair + 1]
                     ag1, ag2 = self.agents[s1.agent_idx], self.agents[s2.agent_idx]
                     out = self.sim.simulate(s1.board, s2.board, stage_level=stage, rng=self.rng)
-                    self._record_unit_telemetry(ag1, out.unit_logs_a)
-                    self._record_unit_telemetry(ag2, out.unit_logs_b)
+                    if not s1.is_historical_ghost:
+                        self._record_unit_telemetry(ag1, out.unit_logs_a)
+                    if not s2.is_historical_ghost:
+                        self._record_unit_telemetry(ag2, out.unit_logs_b)
 
                     prev_ls1, prev_ls2 = s1.lose_streak, s2.lose_streak
                     if out.winner >= 0:
@@ -874,6 +1019,8 @@ class MegaCommunityLeagueTrainer:
                     r2 = self.reward_engine.compute_meso_round_reward(
                         ag2.config, out, False, False, stage, s2.hp, s2.gold, s2.win_streak, s2.lose_streak, prev_ls2
                     )
+                    s1.reward_meso_sum += r1
+                    s2.reward_meso_sum += r2
                     if s1.trajectory:
                         s1.trajectory[-1].reward += r1
                     if s2.trajectory:
@@ -901,12 +1048,39 @@ class MegaCommunityLeagueTrainer:
                 else:
                     s.shop_locked = False
 
-        # 5. Classificação Final (1º ao 8º lugar), Atualização de ELO e Recompensa Macro Terminal
+        # 5. Classificação Final (1º ao 8º lugar), Atualização Pairwise ELO e Recompensa Macro Terminal
         ranked_seats = sorted(
             seats,
             key=lambda s: (1 if s.alive else 0, s.hp, s.eliminated_stage),
             reverse=True,
         )
+
+        # Pairwise Multi-Player ELO Calculation across all 28 pairs
+        seat_placements: Dict[int, int] = {}
+        for rank_idx, s in enumerate(ranked_seats):
+            seat_placements[s.seat_idx] = rank_idx + 1
+
+        if collect_rollouts:
+            elo_deltas: Dict[int, float] = {s.seat_idx: 0.0 for s in seats}
+            k_pair_elo = 3.5
+            for i_s in seats:
+                if i_s.is_historical_ghost:
+                    continue
+                r_i = self.agents[i_s.agent_idx].elo_rating
+                p_i = seat_placements[i_s.seat_idx]
+                for j_s in seats:
+                    if i_s.seat_idx == j_s.seat_idx:
+                        continue
+                    r_j = self.agents[j_s.agent_idx].elo_rating
+                    p_j = seat_placements[j_s.seat_idx]
+                    expected_ij = 1.0 / (1.0 + 10.0 ** ((r_j - r_i) / 400.0))
+                    actual_ij = 1.0 if p_i < p_j else (0.5 if p_i == p_j else 0.0)
+                    elo_deltas[i_s.seat_idx] += k_pair_elo * (actual_ij - expected_ij)
+
+            for s in seats:
+                if not s.is_historical_ghost:
+                    self.agents[s.agent_idx].elo_rating += elo_deltas[s.seat_idx]
+                    self.agents[s.agent_idx].games_played += 1
 
         lobby_results: Dict[int, Dict[str, Any]] = {}
         for rank_idx, s in enumerate(ranked_seats):
@@ -917,20 +1091,28 @@ class MegaCommunityLeagueTrainer:
             term_r = self.reward_engine.compute_macro_terminal_reward(
                 ag.config, placement, s.gold, final_stage_reached=final_stg
             )
+            # Subtração terminal exata do potencial: gamma * Phi(s_terminal=0) - Phi(s_last)
+            term_phi_r = (
+                self.reward_engine.compute_micro_shaping_reward(s.phi_prev, 0.0, done=True)
+                if s.phi_initialized
+                else 0.0
+            )
+            s.reward_micro_sum += term_phi_r
+            s.reward_macro_sum += term_r
 
             if s.trajectory:
-                s.trajectory[-1].reward += term_r
+                s.trajectory[-1].reward += term_r + term_phi_r
                 s.trajectory[-1].done = True
                 for step in s.trajectory:
                     step.oracle_target = oracle_val
 
-            # Atualização de ELO competitivo
-            ag.elo_rating += 6.0 * (4.5 - placement)
-            ag.last_board_names = [f"{u.name}({u.stars}*)" for u in s.board]
+            if not s.is_historical_ghost:
+                ag.last_board_names = [f"{u.name}({u.stars}*)" for u in s.board]
             _, active_tiers = compute_active_synergies(s.board)
 
             lobby_results[s.seat_idx] = {
                 "agent_idx": s.agent_idx,
+                "is_historical_ghost": s.is_historical_ghost,
                 "placement": placement,
                 "final_stage": final_stg,
                 "final_hp": s.hp,
@@ -939,6 +1121,9 @@ class MegaCommunityLeagueTrainer:
                 "evolutions_2star": s.evolutions_2star,
                 "evolutions_3star": s.evolutions_3star,
                 "active_synergies": active_tiers,
+                "reward_micro": s.reward_micro_sum,
+                "reward_meso": s.reward_meso_sum,
+                "reward_macro": s.reward_macro_sum,
                 "trajectory": s.trajectory,
             }
 
@@ -976,22 +1161,38 @@ class MegaCommunityLeagueTrainer:
         evos2_by_agent: Dict[int, List[int]] = {i: [] for i in range(len(self.agents))}
         evos3_by_agent: Dict[int, List[int]] = {i: [] for i in range(len(self.agents))}
         returns_by_agent: Dict[int, List[float]] = {i: [] for i in range(len(self.agents))}
+        rmicro_by_agent: Dict[int, List[float]] = {i: [] for i in range(len(self.agents))}
+        rmeso_by_agent: Dict[int, List[float]] = {i: [] for i in range(len(self.agents))}
+        rmacro_by_agent: Dict[int, List[float]] = {i: [] for i in range(len(self.agents))}
         syns_by_agent: Dict[int, Dict[str, int]] = {i: {} for i in range(len(self.agents))}
 
-        # 1. Roda Lobbies Completos de 8 Jogadores em Self-Play (PFSP)
+        # 1. Roda Lobbies Completos de 8 Jogadores em Self-Play (PFSP + Historical Snapshots)
         for lobby_i in range(lobbies_per_generation):
             focal_idx = (generation * lobbies_per_generation + lobby_i) % len(self.agents)
             seat_indices = self._sample_pfsp_lobby_agents(focal_idx)
             lobby_seed = 100_000 + generation * 1000 + lobby_i * 17
+
+            override_models: Dict[int, CommunityOfModelsBrain] = {}
+            if self.ablation_mode == "A":
+                # Modo A: 1 agente focal treinando contra 7 âncoras congeladas fixas
+                for s_i in range(1, 8):
+                    override_models[s_i] = self.frozen_anchor_models[s_i % len(self.frozen_anchor_models)]
+            elif self.ablation_mode == "D" and len(self.historical_snapshots) >= 2 and (lobby_i % 2 == 1):
+                # Modo D: Inclui 1 snapshot histórico congelado no assento 7 para evitar esquecimento cíclico
+                _, snap_m = self.historical_snapshots[lobby_i % len(self.historical_snapshots)]
+                override_models[7] = snap_m
 
             res = self.run_shared_pool_selfplay_lobby(
                 seat_agent_indices=seat_indices,
                 collect_rollouts=True,
                 deterministic=False,
                 seed=lobby_seed,
+                seat_override_models=override_models if override_models else None,
             )
 
             for _, seat_res in res.items():
+                if seat_res.get("is_historical_ghost", False):
+                    continue
                 ag_i = seat_res["agent_idx"]
                 traj = seat_res["trajectory"]
                 buffers_by_agent[ag_i].extend(traj)
@@ -1002,18 +1203,44 @@ class MegaCommunityLeagueTrainer:
                 evos2_by_agent[ag_i].append(seat_res["evolutions_2star"])
                 evos3_by_agent[ag_i].append(seat_res["evolutions_3star"])
                 returns_by_agent[ag_i].append(sum(st.reward for st in traj))
+                rmicro_by_agent[ag_i].append(float(seat_res.get("reward_micro", 0.0)))
+                rmeso_by_agent[ag_i].append(float(seat_res.get("reward_meso", 0.0)))
+                rmacro_by_agent[ag_i].append(float(seat_res.get("reward_macro", 0.0)))
                 for s_name, s_tier in seat_res["active_synergies"].items():
                     if s_tier > 0:
                         syns_by_agent[ag_i][s_name] = syns_by_agent[ag_i].get(s_name, 0) + 1
 
-        # 2. Atualiza o `CommunityOfModelsBrain` de cada Agente via GPU Maskable PPO
+        # 2. Atualiza o `CommunityOfModelsBrain` de cada Agente via GPU Maskable PPO e registra telemetria
         gen_metrics: List[AgentMetrics] = []
         for ag_i, agent in enumerate(self.agents):
             if buffers_by_agent[ag_i]:
-                if generation == 1:
-                    # Aquece o crítico antes da primeira atualização PPO!
+                if not agent.critic_warmed_up:
+                    # Aquece o crítico antes da primeira atualização PPO e sincroniza step.value in-place!
                     agent.trainer.warmup_critic_only(buffers_by_agent[ag_i], warmup_epochs=8, batch_size=256)
-                agent.trainer.update(buffers_by_agent[ag_i], ppo_epochs=4, batch_size=256)
+                    agent.critic_warmed_up = True
+
+                ppo_diag = agent.trainer.update(buffers_by_agent[ag_i], ppo_epochs=4, batch_size=256)
+                agent.last_ppo_metrics = ppo_diag
+
+                self.ppo_telemetry_log.append({
+                    "generation": generation,
+                    "agent_idx": ag_i,
+                    "agent_name": agent.config.name,
+                    "archetype": agent.config.archetype,
+                    "samples": len(buffers_by_agent[ag_i]),
+                    "games_in_gen": len(placements_by_agent[ag_i]),
+                    "policy_loss": round(float(ppo_diag.get("policy_loss", 0.0)), 5),
+                    "value_loss": round(float(ppo_diag.get("value_loss", 0.0)), 5),
+                    "entropy": round(float(ppo_diag.get("entropy", 0.0)), 4),
+                    "approx_kl": round(float(ppo_diag.get("approx_kl", 0.0)), 5),
+                    "clip_fraction": round(float(ppo_diag.get("clip_fraction", 0.0)), 4),
+                    "explained_var": round(float(ppo_diag.get("explained_var", 0.0)), 4),
+                    "reward_micro_mean": round(float(np.mean(rmicro_by_agent[ag_i] or [0.0])), 4),
+                    "reward_meso_mean": round(float(np.mean(rmeso_by_agent[ag_i] or [0.0])), 4),
+                    "reward_macro_mean": round(float(np.mean(rmacro_by_agent[ag_i] or [0.0])), 4),
+                    "reward_total_mean": round(float(np.mean(returns_by_agent[ag_i] or [0.0])), 4),
+                    "elo_rating": round(float(agent.elo_rating), 1),
+                })
 
             if golds_by_agent[ag_i]:
                 agent.avg_bank_gold = float(np.mean(golds_by_agent[ag_i]))
@@ -1059,17 +1286,39 @@ class MegaCommunityLeagueTrainer:
                 reward_config=agent.config,
             )
 
-        self._pbt_step(gen_metrics)
+        # 3. Salva snapshot histórico do campeão da geração para PFSP
+        best_gen_idx = min(range(len(self.agents)), key=lambda i: gen_metrics[i].avg_placement)
+        snap_copy = copy.deepcopy(self.agents[best_gen_idx].model).to(self.device)
+        snap_copy.eval()
+        for p in snap_copy.parameters():
+            p.requires_grad_(False)
+        self.historical_snapshots.append((f"Gen{generation}_{self.agents[best_gen_idx].config.name}", snap_copy))
+        if len(self.historical_snapshots) > 12:
+            self.historical_snapshots.pop(0)
+
+        # 4. Population-Based Training (PBT) apenas quando habilitado e com amostra mínima
+        if self.enable_pbt:
+            self._pbt_step(gen_metrics, placements_by_agent)
         return gen_metrics
 
-    def _pbt_step(self, gen_metrics: List[AgentMetrics]) -> None:
+    def _pbt_step(
+        self,
+        gen_metrics: List[AgentMetrics],
+        placements_by_agent: Optional[Dict[int, List[int]]] = None,
+    ) -> None:
         """
         Population-Based Training (PBT) sobre o Conselho de Especialistas:
         Compartilha suavemente os pesos do `council_attn` dos 20% melhores agentes
-        para os 20% piores e refina os pesos de recompensa.
+        para os 20% piores, exigindo um número mínimo de partidas para evitar ruído.
         """
-        ranked = sorted(range(len(self.agents)), key=lambda i: gen_metrics[i].avg_placement)
-        k_slice = max(1, len(self.agents) // 5)
+        eligible = [
+            i for i in range(len(self.agents))
+            if (placements_by_agent is None or len(placements_by_agent.get(i, [])) >= 2)
+        ]
+        if len(eligible) < 4:
+            return
+        ranked = sorted(eligible, key=lambda i: (gen_metrics[i].avg_placement, -self.agents[i].elo_rating))
+        k_slice = max(1, len(ranked) // 5)
         for b_idx, e_idx in zip(ranked[-k_slice:], ranked[:k_slice]):
             worst_ag = self.agents[b_idx]
             best_ag = self.agents[e_idx]
@@ -1078,7 +1327,82 @@ class MegaCommunityLeagueTrainer:
                     worst_ag.model.council_attn.parameters(),
                     best_ag.model.council_attn.parameters(),
                 ):
-                    p_w.data.mul_(0.80).add_(p_b.data, alpha=0.20)
+                    p_w.data.mul_(0.85).add_(p_b.data, alpha=0.15)
+
+    def evaluate_against_fixed_benchmark(
+        self,
+        generation: int,
+        num_eval_lobbies: int = 4,
+        base_seed: int = 888_000,
+    ) -> Dict[str, float]:
+        """
+        Avalia os melhores agentes da liga contra um Benchmark Fixo Estacionário
+        (`self.frozen_anchor_models`, congelados antes de qualquer treino PPO) em seeds fixas.
+        """
+        ranked_live = sorted(range(len(self.agents)), key=lambda i: self.agents[i].elo_rating, reverse=True)
+        eval_placements: List[int] = []
+        eval_stages: List[int] = []
+
+        for l_i in range(num_eval_lobbies):
+            focal_idx = ranked_live[l_i % len(ranked_live)]
+            seat_indices = [focal_idx] + [i % len(self.agents) for i in range(1, 8)]
+            override_models = {
+                s_i: self.frozen_anchor_models[(s_i - 1) % len(self.frozen_anchor_models)]
+                for s_i in range(1, 8)
+            }
+            res = self.run_shared_pool_selfplay_lobby(
+                seat_agent_indices=seat_indices,
+                collect_rollouts=False,
+                deterministic=True,
+                seed=base_seed + l_i * 31,
+                seat_override_models=override_models,
+            )
+            focal_res = res[0]
+            eval_placements.append(int(focal_res["placement"]))
+            eval_stages.append(int(focal_res["final_stage"]))
+
+        placement_eval = float(np.mean(eval_placements))
+        top4_eval = float(np.mean([1.0 if p <= 4 else 0.0 for p in eval_placements]))
+        win_eval = float(np.mean([1.0 if p == 1 else 0.0 for p in eval_placements]))
+        stage_eval = float(np.mean(eval_stages))
+
+        record = {
+            "generation": generation,
+            "ablation_mode": self.ablation_mode,
+            "placement_eval": round(placement_eval, 3),
+            "top4_eval_%": round(top4_eval * 100.0, 1),
+            "win_eval_%": round(win_eval * 100.0, 1),
+            "avg_stage_eval": round(stage_eval, 2),
+        }
+        self.eval_benchmark_log.append(record)
+        return record
+
+    def save_checkpoint(self, path: str, generation: int, gen_records: List[Dict[str, Any]]) -> None:
+        """
+        Salva o estado completo de treinamento da Liga Comunitária (modelos, otimizadores,
+        normalizadores de retorno, ELO, histórico, telemetria PPO e benchmark de avaliação).
+        """
+        payload = {
+            "generation": generation,
+            "ablation_mode": self.ablation_mode,
+            "agents": [ag.state_dict() for ag in self.agents],
+            "ppo_telemetry_log": self.ppo_telemetry_log,
+            "eval_benchmark_log": self.eval_benchmark_log,
+            "gen_records": gen_records,
+        }
+        torch.save(payload, path)
+
+    def load_checkpoint(self, path: str) -> Tuple[int, List[Dict[str, Any]]]:
+        """
+        Restaura um checkpoint completo salvo por `save_checkpoint` para continuar o treino (`--resume`).
+        """
+        payload = torch.load(path, map_location=self.device, weights_only=False)
+        saved_agents = payload.get("agents", [])
+        for ag, st in zip(self.agents, saved_agents):
+            ag.load_state_dict(st)
+        self.ppo_telemetry_log = list(payload.get("ppo_telemetry_log", []))
+        self.eval_benchmark_log = list(payload.get("eval_benchmark_log", []))
+        return int(payload.get("generation", 0)), list(payload.get("gen_records", []))
 
     def get_council_telemetry_dataframe(self) -> pd.DataFrame:
         """

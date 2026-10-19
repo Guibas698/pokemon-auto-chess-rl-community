@@ -49,10 +49,16 @@ class MultiScaleRewardEngine:
     r"""
     Calcula as recompensas Micro (potencial $\gamma \Phi(s') - \Phi(s)$), Meso (combate e
     economia por rodada) e Macro (colocação final 1..8) para cada agente da comunidade.
+
+    Invariância de Política (Ng, Harada & Russell, ICML 1999):
+    - Utiliza o MESMO fator de desconto `gamma = 0.99` do `GPUMaskablePPOTrainer`.
+    - Mantém potencial contínuo ao longo de toda a partida e impõe $\Phi(s_{\text{terminal}}) = 0$
+      no passo final (`done=True`), garantindo soma telescópica exata sem competir com a colocação!
     """
 
-    def __init__(self, gamma: float = 0.995):
+    def __init__(self, gamma: float = 0.99, micro_scale: float = 0.25):
         self.gamma = gamma
+        self.micro_scale = micro_scale
 
     def compute_potential_phi(
         self,
@@ -74,6 +80,9 @@ class MultiScaleRewardEngine:
           3. Profundidade de sinergia (ponderada pelo tipo alvo e pela baixa contestação no lobby)
           4. Reserva de juros (descontada se HP estiver em zona crítica < 30)
         """
+        if self.micro_scale <= 0.0 or config.w_potential_shaping <= 0.0:
+            return 0.0
+
         # 1. Força de combate real prevista pelo Surrogate Neural (0..1)
         combat_phi = 2.2 * surrogate_win_prob
 
@@ -116,10 +125,12 @@ class MultiScaleRewardEngine:
         interest_tier = min(5, gold // 10) / 5.0
         econ_phi = config.w_interest * interest_tier * hp_safety + 0.12 * (level / 9.0)
 
-        return float(combat_phi + evo_phi + syn_phi + econ_phi)
+        return float(self.micro_scale * (combat_phi + evo_phi + syn_phi + econ_phi))
 
     def compute_micro_shaping_reward(self, phi_before: float, phi_after: float, done: bool) -> float:
-        r"""Recompensa telescópica estrita $\gamma \Phi(s_{t+1}) - \Phi(s_t)$."""
+        r"""Recompensa telescópica estrita $\gamma \Phi(s_{t+1}) - \Phi(s_t)$ com $\Phi(s_{\text{terminal}}) = 0$."""
+        if self.micro_scale <= 0.0:
+            return 0.0
         next_val = 0.0 if done else (self.gamma * phi_after)
         return float(next_val - phi_before)
 

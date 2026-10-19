@@ -33,6 +33,7 @@ from pac_rl.combat_surrogate import (
     BoardUnit,
     FastCombatSimulator,
     TacticalPositioner,
+    clone_board,
     encode_board_to_tensor,
 )
 from pac_rl.data_loader import NUM_SYNERGIES, PACDataRepository, PokemonSpec
@@ -63,6 +64,19 @@ def get_optimal_device(preferred: str = "auto") -> torch.device:
     return torch.device("cpu")
 
 
+def _safe_key_padding_mask(present_mask: torch.Tensor) -> torch.Tensor:
+    """
+    Converte máscara de presença booleana `(B, N)` em `key_padding_mask` (`True` = ignorar slot vazio),
+    garantindo que ao menos o slot 0 fique desmascarado caso um tabuleiro esteja 100% vazio (evita NaN no Softmax).
+    """
+    pad_mask = ~present_mask
+    all_empty = pad_mask.all(dim=1)
+    if all_empty.any():
+        pad_mask = pad_mask.clone()
+        pad_mask[all_empty, 0] = False
+    return pad_mask
+
+
 class PreNormAttentionBlock(nn.Module):
     def __init__(self, d_model: int = 256, nhead: int = 8, dropout: float = 0.08):
         super().__init__()
@@ -77,16 +91,16 @@ class PreNormAttentionBlock(nn.Module):
             nn.Dropout(dropout),
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, key_padding_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         x_norm = self.norm1(x)
-        attn_out, _ = self.attn(x_norm, x_norm, x_norm)
+        attn_out, _ = self.attn(x_norm, x_norm, x_norm, key_padding_mask=key_padding_mask)
         x = x + attn_out
         x = x + self.ffn(self.norm2(x))
         return x
 
 
 class CrossTeamAttentionBlock(nn.Module):
-    """Cross-Attention permitindo que cada unidade do Time A inspecione os alvos do Time B."""
+    """Cross-Attention permitindo que cada unidade ativa do Time A inspecione apenas unidades ativas do Time B."""
 
     def __init__(self, d_model: int = 256, nhead: int = 8, dropout: float = 0.08):
         super().__init__()
@@ -100,10 +114,15 @@ class CrossTeamAttentionBlock(nn.Module):
             nn.Linear(d_model * 2, d_model),
         )
 
-    def forward(self, team_q: torch.Tensor, team_kv: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        team_q: torch.Tensor,
+        team_kv: torch.Tensor,
+        kv_padding_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
         q = self.norm_q(team_q)
         kv = self.norm_kv(team_kv)
-        cross_out, _ = self.cross_attn(q, kv, kv)
+        cross_out, _ = self.cross_attn(q, kv, kv, key_padding_mask=kv_padding_mask)
         h = team_q + cross_out
         h = h + self.ffn(self.norm_ffn(h))
         return h
@@ -158,18 +177,23 @@ class DeepSetTransformerSurrogate(nn.Module):
         units_b: torch.Tensor,
         syn_b: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        mask_a = (units_a[:, :, 0] > 0.5).unsqueeze(-1).float()
-        mask_b = (units_b[:, :, 0] > 0.5).unsqueeze(-1).float()
+        present_a = units_a[:, :, 0] > 0.5
+        present_b = units_b[:, :, 0] > 0.5
+        pad_mask_a = _safe_key_padding_mask(present_a)
+        pad_mask_b = _safe_key_padding_mask(present_b)
 
-        ha = self.unit_embed(units_a)
-        hb = self.unit_embed(units_b)
+        mask_a = present_a.unsqueeze(-1).float()
+        mask_b = present_b.unsqueeze(-1).float()
+
+        ha = self.unit_embed(units_a) * mask_a
+        hb = self.unit_embed(units_b) * mask_b
 
         for layer in self.self_layers:
-            ha = layer(ha)
-            hb = layer(hb)
+            ha = layer(ha, key_padding_mask=pad_mask_a) * mask_a
+            hb = layer(hb, key_padding_mask=pad_mask_b) * mask_b
 
-        ha_cross = self.cross_block(ha, hb)
-        hb_cross = self.cross_block(hb, ha)
+        ha_cross = self.cross_block(ha, hb, kv_padding_mask=pad_mask_b) * mask_a
+        hb_cross = self.cross_block(hb, ha, kv_padding_mask=pad_mask_a) * mask_b
 
         pool_a = (ha_cross * mask_a).sum(dim=1) / mask_a.sum(dim=1).clamp(min=1.0)
         pool_b = (hb_cross * mask_b).sum(dim=1) / mask_b.sum(dim=1).clamp(min=1.0)
@@ -195,6 +219,8 @@ class NeuralLookaheadRosterPlanner:
     """
     Integra Busca Clássica Combinatória (1-Step Lookahead & Swap Hill-Climbing)
     com o `DeepSetTransformerSurrogate` rodando em lote na GPU!
+    Usa `clone_board` em todas as simulações contrafactuais para garantir zero
+    mutação colateral nas coordenadas `(x, y)` do tabuleiro real.
     """
 
     def __init__(self, surrogate: DeepSetTransformerSurrogate, device: torch.device):
@@ -263,8 +289,9 @@ class NeuralLookaheadRosterPlanner:
         Para o estado atual, usa o `DeepSetTransformerSurrogate` na GPU para calcular:
         1. `base_win_prob`: Chance de vitória atual do tabuleiro contra o lobby
         2. `marginal_gains[0..5]`: $\Delta \widehat{P}_{\text{win}}$ se comprarmos/colocarmos a carta `shop[i]`!
+        Usa cópias independentes (`clone_board`) para NUNCA alterar `x, y` do `board` original.
         """
-        candidates: List[List[BoardUnit]] = [board]
+        candidates: List[List[BoardUnit]] = [clone_board(board)]
         valid_slot_indices: List[int] = []
 
         for slot_i, p in enumerate(shop):
@@ -272,13 +299,13 @@ class NeuralLookaheadRosterPlanner:
                 continue
             new_u = BoardUnit.from_pokemon_stats(p, x=2, y=2)
             if len(board) < player_level:
-                hyp_board = TacticalPositioner.optimize_positions(list(board) + [new_u])
+                hyp_board = TacticalPositioner.optimize_positions(clone_board(board) + [new_u], in_place=True)
             elif board:
-                # Simulate replacing the lowest-HP/lowest-star unit on board
+                # Simulate replacing the lowest-HP/lowest-star unit on a deep-cloned board
                 weak_idx = min(range(len(board)), key=lambda idx: board[idx].hp * board[idx].stars)
-                hyp_board = list(board)
+                hyp_board = clone_board(board)
                 hyp_board[weak_idx] = new_u
-                hyp_board = TacticalPositioner.optimize_positions(hyp_board)
+                hyp_board = TacticalPositioner.optimize_positions(hyp_board, in_place=True)
             else:
                 hyp_board = [new_u]
             candidates.append(hyp_board)
@@ -303,23 +330,24 @@ class NeuralLookaheadRosterPlanner:
         r"""
         Algoritmo Clássico de Busca Local (1-Step Swap Hill-Climbing) guiado pelo
         `DeepSetTransformerSurrogate`: testa todas as trocas unitárias entre `board` e `bench`
-        em um único batch na GPU e aplica a troca se ela aumentar a chance real de vitória!
+        em um único batch na GPU usando cópias independentes (`clone_board`) e aplica a troca
+        apenas se ela aumentar a chance real de vitória!
         """
         while len(board) < player_level and bench:
             board.append(bench.pop(0))
 
-        board = TacticalPositioner.optimize_positions(board)
+        board = TacticalPositioner.optimize_positions(board, in_place=True)
         if not bench or not board:
             return board, bench
 
-        candidates: List[List[BoardUnit]] = [list(board)]
+        candidates: List[List[BoardUnit]] = [clone_board(board)]
         swap_pairs: List[Tuple[int, int]] = []
 
         for b_idx in range(len(board)):
             for bench_idx in range(min(4, len(bench))):
-                cand = list(board)
-                cand[b_idx] = bench[bench_idx]
-                candidates.append(TacticalPositioner.optimize_positions(cand))
+                cand = clone_board(board)
+                cand[b_idx] = bench[bench_idx].clone()
+                candidates.append(TacticalPositioner.optimize_positions(cand, in_place=True))
                 swap_pairs.append((b_idx, bench_idx))
 
         probs = self.predict_win_prob_vs_lobby(candidates, opponent_boards)
@@ -329,7 +357,7 @@ class NeuralLookaheadRosterPlanner:
             old_board_u = board[b_i]
             board[b_i] = bench[bench_i]
             bench[bench_i] = old_board_u
-            board = TacticalPositioner.optimize_positions(board)
+            board = TacticalPositioner.optimize_positions(board, in_place=True)
 
         return board, bench
 
@@ -338,15 +366,41 @@ class NeuralLookaheadRosterPlanner:
 # Comunidade Interna de Modelos: 7 Peritos Especialistas + Meta-Arbitrador
 # ============================================================================
 
+# Fatias de domínio primário (dentro dos 87 primeiros índices universais) para dar
+# viés indutivo estrutural distinto a cada um dos 7 Especialistas:
+EXPERT_DOMAIN_SLICES: List[Tuple[int, int]] = [
+    (0, 12),   # 0. Economist_Compound_Expert: Stage, HP, Gold, Interest, Level, XP, Streaks
+    (4, 18),   # 1. WinStreak_Tempo_Expert: Level, Streaks, Board Size, Relative Power, 2*/3*, Alive
+    (0, 14),   # 2. LoseStreak_Cashout_Expert: Stage, HP, Gold, Lose Streak, Shop Pairs/Synergy
+    (12, 42),  # 3. HyperRoll_Evolution_Expert: Shop Slots (0..5), Pairs, Copies, Cost, 2*/3*
+    (42, 73),  # 4. Synergy_Vertical_Expert: Vetor das 31 Sinergias Ativas no Tabuleiro
+    (8, 42),   # 5. LobbyScout_Counter_Expert: Board/Bench Density + Shop Counter Options
+    (0, 18),   # 6. LateGame_Cap_Expert: Stage, Level, Free Slots, 2*/3*, Max Synergy Tier
+]
+
+
 class SubAgentExpertModule(nn.Module):
     r"""
     Um Sub-Modelo Especialista dentro do Conselho/Comunidade que compõe 1 jogador.
-    Possui seu próprio extrator de representações focado nas features do seu domínio,
-    produzindo um vetor latente de argumento `h_expert` e sua proposta de logits de ação.
+    Possui uma projeção dedicada para sua fatia de domínio (`domain_slice`) combinada
+    ao estado global, garantindo especialização estrutural real entre os 7 peritos!
     """
 
-    def __init__(self, obs_dim: int, hidden_dim: int, num_actions: int):
+    def __init__(
+        self,
+        obs_dim: int,
+        hidden_dim: int,
+        num_actions: int,
+        domain_slice: Tuple[int, int] = (0, 18),
+    ):
         super().__init__()
+        self.domain_slice = domain_slice
+        dom_len = max(1, domain_slice[1] - domain_slice[0])
+        self.domain_gate = nn.Sequential(
+            nn.Linear(dom_len, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.Sigmoid(),
+        )
         self.net = nn.Sequential(
             nn.Linear(obs_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
@@ -358,15 +412,18 @@ class SubAgentExpertModule(nn.Module):
         self.action_proposal = nn.Linear(hidden_dim, num_actions)
 
     def forward(self, obs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        h = self.net(obs)
+        s_start, s_end = self.domain_slice
+        dom_x = obs[:, s_start:s_end]
+        gate = 0.5 + self.domain_gate(dom_x)  # (B, hidden_dim) in [0.5, 1.5]
+        h = self.net(obs) * gate
         logits = self.action_proposal(h)
         return h, logits
 
 
 class RunningReturnNormalizer:
     r"""
-    Normalizador Welford Online (`RunningMeanStd`) para os retornos dos críticos (`v_shaped` e `v_oracle`).
-    Impede que retornos não-normalizados gerem gradientes 20x maiores que o `pg_loss` no tronco!
+    Normalizador Welford Online (`RunningMeanStd`) para os retornos dos críticos (`v_shaped` e `v_oracle`)
+    com métodos explícitos de `normalize`, `unnormalize` e serialização (`state_dict` / `load_state_dict`).
     """
 
     def __init__(self, epsilon: float = 1e-5, clip_range: float = 5.0):
@@ -374,6 +431,10 @@ class RunningReturnNormalizer:
         self.var: float = 1.0
         self.count: float = epsilon
         self.clip_range: float = clip_range
+
+    @property
+    def std(self) -> float:
+        return float(np.sqrt(self.var) + 1e-6)
 
     def update(self, x: np.ndarray) -> None:
         if x.size == 0:
@@ -392,8 +453,26 @@ class RunningReturnNormalizer:
         self.count = tot_count
 
     def normalize(self, x: np.ndarray) -> np.ndarray:
-        std = float(np.sqrt(self.var) + 1e-6)
-        return np.clip((x - self.mean) / std, -self.clip_range, self.clip_range).astype(np.float32)
+        return np.clip((x - self.mean) / self.std, -self.clip_range, self.clip_range).astype(np.float32)
+
+    def unnormalize(self, x_norm: np.ndarray) -> np.ndarray:
+        if self.count <= 1e-3:
+            return x_norm.astype(np.float32)
+        return (x_norm * self.std + self.mean).astype(np.float32)
+
+    def state_dict(self) -> Dict[str, float]:
+        return {
+            "mean": float(self.mean),
+            "var": float(self.var),
+            "count": float(self.count),
+            "clip_range": float(self.clip_range),
+        }
+
+    def load_state_dict(self, state: Dict[str, float]) -> None:
+        self.mean = float(state.get("mean", 0.0))
+        self.var = float(state.get("var", 1.0))
+        self.count = float(state.get("count", 1e-5))
+        self.clip_range = float(state.get("clip_range", 5.0))
 
 
 class CommunityOfModelsBrain(nn.Module):
@@ -443,9 +522,17 @@ class CommunityOfModelsBrain(nn.Module):
         self.unit_id_actor_proj = nn.Linear(16 * species_emb_dim, expert_dim)
         self.unit_id_critic_proj = nn.Linear(16 * species_emb_dim, expert_dim)
 
-        # Os 7 Sub-Agentes Especialistas (Política / Ator)
+        # Os 7 Sub-Agentes Especialistas (Política / Ator) com viés indutivo por domínio
         self.experts = nn.ModuleList(
-            [SubAgentExpertModule(obs_dim, expert_dim, num_actions) for _ in range(NUM_EXPERTS)]
+            [
+                SubAgentExpertModule(
+                    obs_dim,
+                    expert_dim,
+                    num_actions,
+                    domain_slice=EXPERT_DOMAIN_SLICES[m],
+                )
+                for m in range(NUM_EXPERTS)
+            ]
         )
 
         # Codificador da Persona / Objetivo do Jogador (39 dims lidos de self.persona_range)
@@ -665,20 +752,19 @@ class GPURolloutStep:
 class GPUMaskablePPOTrainer:
     r"""
     Treinador Maskable PPO de Segunda Geração para o `CommunityOfModelsBrain`
-    (Projetado especificamente para superar heurísticas clonadas via Behavioral Cloning):
-    1. **Protocolo de Aquecimento do Crítico (`warmup_critic_only`)**:
-       Treina exclusivamente `critic_state_encoder`, `critic_shaped` e `critic_oracle` com
-       os 7 especialistas congelados até atingir alta Variância Explicada ($R^2 \ge 0.65$).
-    2. **Normalização Online de Retornos (`RunningReturnNormalizer`) + Clipped Huber Value Loss**:
-       Normaliza `returns` e `oracle_target` para média 0 e variância 1, impedindo que a escala
-       do crítico esmague o gradiente da política.
-    3. **Âncora KL contra Política Clonada (`set_bc_reference_anchor`, estilo AlphaStar)**:
-       Mantém uma cópia congelada $\pi_{\text{BC}}$ pós-clonagem e penaliza desvios destrutivos
-       $\beta_{\text{KL}} D_{\text{KL}}(\pi_{\text{BC}}(\cdot|s) \,\|\, \pi_\theta(\cdot|s))$.
-    4. **Piso de Entropia (`entropy_floor = 0.32`) e Parada KL por Mini-Batch (`target_kl = 0.012`)**:
-       Em vez de empurrar cegamente a entropia para cima quando a vantagem é ruidosa, aplica
-       força de entropia APENAS se $\mathcal{H}(\pi) < \mathcal{H}_{\text{floor}}$, e interrompe
-       imediatamente no mini-batch se `approx_kl > 1.5 * target_kl`!
+    (Corrigido conforme auditoria técnica — Engstrom et al. ICLR 2020 & Huang et al. 37 Details):
+    1. **Consistência Estrita de Escala no Crítico (`_compute_gae_and_normalized_targets`)**:
+       - Desnormaliza `s.value` com as estatísticas vigentes no momento da coleta (`ret_norm.unnormalize`),
+         calcula o GAE (`advantages` e `raw_returns`) na escala real da recompensa e re-normaliza
+         SIMULTANEAMENTE `raw_returns` e `val_real` (`norm_old_val`) na mesma escala atualizada!
+       - Por padrão, `clip_vloss=False` (conforme recomendação da literatura de PPO para evitar
+         travar o crítico em valores antigos defasados), usando perda Smooth L1 (Huber) pura.
+    2. **Sincronização Pós-Aquecimento (`warmup_critic_only`)**:
+       - Após aquecer o crítico, atualiza in-place os `s.value` do buffer com as previsões do
+         crítico aquecido para que uma chamada subsequente a `update()` nunca compare o novo
+         crítico contra valores aleatórios pré-aquecimento!
+    3. **Âncora KL contra Política Clonada (`set_bc_reference_anchor`, estilo AlphaStar)** e
+       **Piso de Entropia (`entropy_floor = 0.32`) + Parada KL por Mini-Batch (`target_kl = 0.012`)**.
     """
 
     def __init__(
@@ -698,6 +784,7 @@ class GPUMaskablePPOTrainer:
         max_grad_norm: float = 0.5,
         target_kl: float = 0.012,
         normalize_returns: bool = True,
+        clip_vloss: bool = False,
         use_amp: bool = True,
     ):
         self.device = device
@@ -721,11 +808,31 @@ class GPUMaskablePPOTrainer:
         self.max_grad_norm = max_grad_norm
         self.target_kl = target_kl
         self.normalize_returns = normalize_returns
+        self.clip_vloss = clip_vloss
         self.ret_norm = RunningReturnNormalizer()
         self.ora_norm = RunningReturnNormalizer()
         self.bc_anchor_model: Optional[CommunityOfModelsBrain] = None
         self.use_amp = use_amp and (device.type == "cuda")
         self.scaler = torch.amp.GradScaler("cuda", enabled=self.use_amp)
+
+    def state_dict(self) -> Dict[str, object]:
+        """Serializa o estado completo do treinador PPO (otimizador + normalizadores de retorno)."""
+        return {
+            "optimizer": self.optimizer.state_dict(),
+            "ret_norm": self.ret_norm.state_dict(),
+            "ora_norm": self.ora_norm.state_dict(),
+            "normalize_returns": self.normalize_returns,
+            "clip_vloss": self.clip_vloss,
+        }
+
+    def load_state_dict(self, state: Dict[str, object]) -> None:
+        """Restaura o estado completo do treinador PPO a partir de um checkpoint."""
+        if "optimizer" in state and state["optimizer"] is not None:
+            self.optimizer.load_state_dict(state["optimizer"])  # type: ignore[arg-type]
+        if "ret_norm" in state and isinstance(state["ret_norm"], dict):
+            self.ret_norm.load_state_dict(state["ret_norm"])
+        if "ora_norm" in state and isinstance(state["ora_norm"], dict):
+            self.ora_norm.load_state_dict(state["ora_norm"])
 
     def set_bc_reference_anchor(self, bc_kl_coef: float = 0.04) -> None:
         """
@@ -745,19 +852,25 @@ class GPUMaskablePPOTrainer:
     def _compute_gae_and_normalized_targets(
         self,
         buffer: List[GPURolloutStep],
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        update_normalizer: bool = True,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Calcula GAE na escala real das recompensas e retorna `(advantages, norm_returns, norm_ora, norm_old_val)`
+        garantindo que `norm_returns` e `norm_old_val` estejam EXATAMENTE na mesma escala normalizada!
+        """
         n = len(buffer)
         rew_arr = np.array([s.reward for s in buffer], dtype=np.float32)
         done_arr = np.array([s.done for s in buffer], dtype=np.float32)
         val_arr = np.array([s.value for s in buffer], dtype=np.float32)
         ora_arr = np.array([s.oracle_target for s in buffer], dtype=np.float32)
 
-        # Se os retornos são normalizados, desnormaliza `val_arr` para calcular TD-error na escala real da recompensa
-        if self.normalize_returns and self.ret_norm.count > 10:
-            val_real = val_arr * float(np.sqrt(self.ret_norm.var) + 1e-6) + self.ret_norm.mean
+        # 1. Desnormaliza `val_arr` usando a escala que estava ativa durante a coleta do rollout
+        if self.normalize_returns and self.ret_norm.count > 1.0:
+            val_real = self.ret_norm.unnormalize(val_arr)
         else:
-            val_real = val_arr
+            val_real = val_arr.copy()
 
+        # 2. Calcula GAE estritamente na escala real das recompensas
         advantages = np.zeros(n, dtype=np.float32)
         last_gae = 0.0
         for t in reversed(range(n)):
@@ -768,17 +881,23 @@ class GPUMaskablePPOTrainer:
             advantages[t] = last_gae
 
         raw_returns = advantages + val_real
+
+        # 3. Atualiza o normalizador (se solicitado) e projeta TANTO `raw_returns` QUANTO `val_real`
+        # para a MESMA escala atualizada!
         if self.normalize_returns:
-            self.ret_norm.update(raw_returns)
-            self.ora_norm.update(ora_arr)
+            if update_normalizer:
+                self.ret_norm.update(raw_returns)
+                self.ora_norm.update(ora_arr)
             norm_returns = self.ret_norm.normalize(raw_returns)
             norm_ora = self.ora_norm.normalize(ora_arr)
+            norm_old_val = self.ret_norm.normalize(val_real)
         else:
             norm_returns = raw_returns
             norm_ora = ora_arr
+            norm_old_val = val_real
 
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-        return advantages, norm_returns, norm_ora
+        return advantages, norm_returns, norm_ora, norm_old_val
 
     def _extract_unit_ids_tensor(self, buffer: List[GPURolloutStep]) -> Optional[torch.Tensor]:
         if not buffer or buffer[0].unit_species_ids is None:
@@ -804,13 +923,15 @@ class GPUMaskablePPOTrainer:
         Fase 1.5 (Entre a Clonagem BC e o PPO):
         Congela 100% da política (os 7 Especialistas + Gating) e treina exclusivamente os
         críticos (`v_shaped` e `v_oracle`) até estabilizar a Variância Explicada ($R^2$).
+        Ao final, atualiza `step.value` no buffer com as previsões do crítico aquecido para
+        manter total consistência de escala caso `update()` seja chamado em seguida.
         """
         if not buffer:
             return {"critic_loss": 0.0, "explained_variance": 0.0}
 
         n = len(buffer)
         obs_arr = np.array([s.obs for s in buffer], dtype=np.float32)
-        _, norm_returns, norm_ora = self._compute_gae_and_normalized_targets(buffer)
+        _, norm_returns, norm_ora, _ = self._compute_gae_and_normalized_targets(buffer, update_normalizer=True)
 
         t_obs = torch.from_numpy(obs_arr).to(self.device)
         t_ids = self._extract_unit_ids_tensor(buffer)
@@ -834,10 +955,14 @@ class GPUMaskablePPOTrainer:
                 critic_opt.step()
                 last_loss = float(loss_v.item())
 
+        self.model.eval()
         with torch.no_grad():
             _, _, v_pred_all, _ = self.model.forward_council(t_obs, unit_species_ids=t_ids)
             y_true = t_ret.cpu().numpy()
             y_pred = v_pred_all.cpu().numpy()
+            # Sincroniza os valores do buffer com o crítico aquecido na escala atual do ret_norm!
+            for idx_step, step in enumerate(buffer):
+                step.value = float(y_pred[idx_step])
             var_y = float(np.var(y_true))
             ev = 1.0 - float(np.var(y_true - y_pred)) / max(1e-6, var_y)
 
@@ -845,28 +970,36 @@ class GPUMaskablePPOTrainer:
 
     def update(self, buffer: List[GPURolloutStep], ppo_epochs: int = 4, batch_size: int = 256) -> Dict[str, float]:
         if not buffer:
-            return {"policy_loss": 0.0, "value_loss": 0.0, "entropy": 0.0, "approx_kl": 0.0, "explained_var": 0.0}
+            return {
+                "policy_loss": 0.0,
+                "value_loss": 0.0,
+                "entropy": 0.0,
+                "approx_kl": 0.0,
+                "clip_fraction": 0.0,
+                "explained_var": 0.0,
+            }
 
         n = len(buffer)
         obs_arr = np.array([s.obs for s in buffer], dtype=np.float32)
         mask_arr = np.array([s.mask for s in buffer], dtype=bool)
         act_arr = np.array([s.action for s in buffer], dtype=np.int64)
         old_logp_arr = np.array([s.log_prob for s in buffer], dtype=np.float32)
-        old_val_arr = np.array([s.value for s in buffer], dtype=np.float32)
 
-        advantages, norm_returns, norm_ora = self._compute_gae_and_normalized_targets(buffer)
+        advantages, norm_returns, norm_ora, norm_old_val = self._compute_gae_and_normalized_targets(
+            buffer, update_normalizer=True
+        )
 
         t_obs = torch.from_numpy(obs_arr).to(self.device)
         t_ids = self._extract_unit_ids_tensor(buffer)
         t_mask = torch.from_numpy(mask_arr).to(self.device)
         t_act = torch.from_numpy(act_arr).to(self.device)
         t_old_logp = torch.from_numpy(old_logp_arr).to(self.device)
-        t_old_val = torch.from_numpy(old_val_arr).to(self.device)
+        t_old_val = torch.from_numpy(norm_old_val).to(self.device)
         t_adv = torch.from_numpy(advantages).to(self.device)
         t_ret = torch.from_numpy(norm_returns).to(self.device)
         t_ora = torch.from_numpy(norm_ora).to(self.device)
 
-        total_pg, total_vf, total_ent, total_kl, updates = 0.0, 0.0, 0.0, 0.0, 0
+        total_pg, total_vf, total_ent, total_kl, total_clip, updates = 0.0, 0.0, 0.0, 0.0, 0.0, 0
         early_stop_triggered = False
         self.model.train()
 
@@ -891,6 +1024,7 @@ class GPUMaskablePPOTrainer:
                     logratio = new_logp - t_old_logp[idx]
                     ratio = logratio.exp()
                     approx_kl = ((ratio - 1.0) - logratio).mean()
+                    clip_frac = ((ratio - 1.0).abs() > self.clip_coef).float().mean()
 
                     # Parada imediata por Mini-Batch (após o 1º passo) se violar a região de confiança KL!
                     if updates > 0 and float(approx_kl.item()) > 1.5 * self.target_kl:
@@ -907,13 +1041,17 @@ class GPUMaskablePPOTrainer:
                     pg_loss2 = -mb_adv * torch.clamp(ratio, 1.0 - self.clip_coef, 1.0 + self.clip_coef)
                     pg_loss = torch.max(pg_loss1, pg_loss2).mean()
 
-                    # Clipped Huber Value Loss (Smooth L1) sobre retornos normalizados
-                    v_pred_clipped = t_old_val[idx] + torch.clamp(
-                        new_val - t_old_val[idx], -self.clip_coef, self.clip_coef
-                    )
-                    v_loss_unclipped = F.smooth_l1_loss(new_val, t_ret[idx], reduction="none")
-                    v_loss_clipped = F.smooth_l1_loss(v_pred_clipped, t_ret[idx], reduction="none")
-                    v_loss_shaped = torch.max(v_loss_unclipped, v_loss_clipped).mean()
+                    # Huber Value Loss (Smooth L1) consistente na mesma escala de t_ret
+                    if self.clip_vloss:
+                        v_pred_clipped = t_old_val[idx] + torch.clamp(
+                            new_val - t_old_val[idx], -self.clip_coef, self.clip_coef
+                        )
+                        v_loss_unclipped = F.smooth_l1_loss(new_val, t_ret[idx], reduction="none")
+                        v_loss_clipped = F.smooth_l1_loss(v_pred_clipped, t_ret[idx], reduction="none")
+                        v_loss_shaped = torch.max(v_loss_unclipped, v_loss_clipped).mean()
+                    else:
+                        v_loss_shaped = F.smooth_l1_loss(new_val, t_ret[idx])
+
                     v_loss_oracle = F.smooth_l1_loss(new_ora, t_ora[idx])
                     v_loss = 0.5 * v_loss_shaped + 0.25 * v_loss_oracle
 
@@ -959,6 +1097,7 @@ class GPUMaskablePPOTrainer:
                 total_vf += float(v_loss.item())
                 total_ent += float(mean_ent.item())
                 total_kl += float(approx_kl.item())
+                total_clip += float(clip_frac.item())
                 updates += 1
 
         with torch.no_grad():
@@ -973,6 +1112,7 @@ class GPUMaskablePPOTrainer:
             "value_loss": total_vf / denom,
             "entropy": total_ent / denom,
             "approx_kl": total_kl / denom,
+            "clip_fraction": total_clip / denom,
             "explained_var": ev,
         }
 
@@ -990,6 +1130,12 @@ def train_deep_gpu_surrogate(
     """
     Treina o `DeepSetTransformerSurrogate` em larga escala na GPU (prevendo Vitória,
     Margem de Sobreviventes, Pico de Dano do Carry e Pico de Absorção do Tank).
+
+    Correção de Distribuição (Auditoria Técnica):
+    - Ambos os tabuleiros `ba` e `bb` são SEMPRE amostrados no MESMO estágio `stage`!
+    - 40% dos pares são confrontos parelhos/contrafactuais (mesmo tamanho de tabuleiro ou
+      perturbação de 1 peça/estrela), calibrando o surrogate especificamente para as consultas
+      marginais do `NeuralLookaheadRosterPlanner`.
     """
     rng = np.random.default_rng(seed)
     torch.manual_seed(seed)
@@ -1006,9 +1152,8 @@ def train_deep_gpu_surrogate(
     all_pokes = list(repo.pokemon_by_name.values())
     bots = repo.bots
 
-    def sample_board() -> Tuple[List[BoardUnit], int]:
-        stage = int(rng.integers(3, 35))
-        if bots and rng.random() < 0.70:
+    def sample_board_at_stage(stage: int, target_size: Optional[int] = None) -> List[BoardUnit]:
+        if bots and rng.random() < 0.65:
             bot = bots[int(rng.integers(0, len(bots)))]
             entries = repo.get_bot_stage_board(bot, stage)
             units = []
@@ -1017,24 +1162,31 @@ def train_deep_gpu_surrogate(
                 if p is not None:
                     units.append(BoardUnit.from_pokemon_stats(p, x=x, y=min(3, max(0, y - 1)), num_items=n_items))
             if units:
-                return units, stage
-        n_u = int(rng.integers(3, min(9, max(4, stage // 3 + 2)) + 1))
-        chosen = rng.choice(len(all_pokes), size=n_u, replace=False)
+                return units
+        expected_n = min(9, max(2, stage // 3 + 2))
+        n_u = target_size if target_size is not None else int(rng.integers(max(2, expected_n - 1), min(9, expected_n + 1) + 1))
+        chosen = rng.choice(len(all_pokes), size=min(n_u, len(all_pokes)), replace=False)
+        max_it = min(3, max(1, stage // 8 + 1))
         units = [
             BoardUnit.from_pokemon_stats(
                 all_pokes[idx],
                 x=int(rng.integers(0, 6)),
                 y=int(rng.integers(0, 4)),
-                num_items=int(rng.integers(0, 3)),
+                num_items=int(rng.integers(0, max_it)),
             )
             for idx in chosen
         ]
-        return TacticalPositioner.optimize_positions(units), stage
+        return TacticalPositioner.optimize_positions(units, in_place=True)
 
     for i in range(num_samples):
-        ba, sa_st = sample_board()
-        bb, sb_st = sample_board()
-        outcome = sim.simulate(ba, bb, stage_level=(sa_st + sb_st) // 2, rng=rng)
+        stage = int(rng.integers(3, 35))
+        ba = sample_board_at_stage(stage)
+        if rng.random() < 0.35 and len(ba) >= 2:
+            # Par parelho/contrafactual no mesmo estágio e mesmo número de unidades
+            bb = sample_board_at_stage(stage, target_size=len(ba))
+        else:
+            bb = sample_board_at_stage(stage)
+        outcome = sim.simulate(ba, bb, stage_level=stage, rng=rng)
         ua, sa = encode_board_to_tensor(ba)
         ub, sb = encode_board_to_tensor(bb)
         X_ua[i] = ua

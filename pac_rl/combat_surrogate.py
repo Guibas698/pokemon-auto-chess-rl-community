@@ -91,6 +91,33 @@ class BoardUnit:
             family=str(getattr(p, "family", p.name)),
         )
 
+    def clone(self) -> "BoardUnit":
+        """Retorna uma cópia independente da unidade para simulações contrafactuais (Lookahead)."""
+        return BoardUnit(
+            name=self.name,
+            index=self.index,
+            stars=self.stars,
+            rarity=self.rarity,
+            types=tuple(self.types),
+            hp=self.hp,
+            atk=self.atk,
+            defense=self.defense,
+            spe_def=self.spe_def,
+            speed=self.speed,
+            max_pp=self.max_pp,
+            attack_range=self.attack_range,
+            x=self.x,
+            y=self.y,
+            num_items=self.num_items,
+            species_id=self.species_id,
+            family=self.family,
+        )
+
+
+def clone_board(units: List[BoardUnit]) -> List[BoardUnit]:
+    """Cria uma cópia profunda rápida de uma lista de `BoardUnit`."""
+    return [u.clone() for u in units]
+
 
 @dataclass
 class UnitCombatLog:
@@ -664,8 +691,15 @@ class SetTransformerCombatSurrogate(nn.Module):
     def encode_team(self, unit_feats: torch.Tensor, syn_vec: torch.Tensor) -> torch.Tensor:
         # unit_feats: (B, N, F), syn_vec: (B, 31)
         mask = unit_feats[:, :, 0] > 0.5  # (B, N)
+        # Key padding mask (True = ignore empty slot); ensure slot 0 is unmasked if board is completely empty
+        pad_mask = ~mask
+        all_empty = pad_mask.all(dim=1)
+        if all_empty.any():
+            pad_mask = pad_mask.clone()
+            pad_mask[all_empty, 0] = False
+
         h = self.unit_proj(unit_feats)
-        attn_out, _ = self.self_attn(h, h, h)
+        attn_out, _ = self.self_attn(h, h, h, key_padding_mask=pad_mask)
         h = self.norm1(h + attn_out)
         h = self.norm2(h + self.ffn(h))
 
@@ -706,9 +740,11 @@ class TacticalPositioner:
     """
 
     @staticmethod
-    def optimize_positions(units: List[BoardUnit]) -> List[BoardUnit]:
+    def optimize_positions(units: List[BoardUnit], in_place: bool = False) -> List[BoardUnit]:
         if not units:
-            return units
+            return []
+        if not in_place:
+            units = clone_board(units)
 
         frontline_slots = [(2, 3), (3, 3), (1, 3), (4, 3), (0, 3), (5, 3)]
         midline_slots = [(2, 2), (3, 2), (1, 2), (4, 2)]
@@ -774,7 +810,7 @@ def train_combat_surrogate(
     seed: int = 42,
 ) -> Tuple[SetTransformerCombatSurrogate, Dict[str, float]]:
     """
-    Generates synthetic + bot-vs-bot combat matchups using `FastCombatSimulator`
+    Generates same-stage synthetic + bot-vs-bot combat matchups using `FastCombatSimulator`
     and trains the PyTorch `SetTransformerCombatSurrogate` neural network.
     """
     rng = np.random.default_rng(seed)
@@ -790,8 +826,7 @@ def train_combat_surrogate(
     all_pokes = list(repo.pokemon_by_name.values())
     bots = repo.bots
 
-    def sample_board() -> Tuple[List[BoardUnit], int]:
-        stage = int(rng.integers(3, 32))
+    def sample_board_at_stage(stage: int) -> List[BoardUnit]:
         if bots and rng.random() < 0.65:
             bot = bots[int(rng.integers(0, len(bots)))]
             board_entries = repo.get_bot_stage_board(bot, stage)
@@ -801,25 +836,25 @@ def train_combat_surrogate(
                 if p is not None:
                     units.append(BoardUnit.from_pokemon_stats(p, x=x, y=min(3, max(0, y - 1)), num_items=n_items))
             if units:
-                return units, stage
-        # Otherwise random composition
-        n_u = int(rng.integers(3, min(9, max(4, stage // 3 + 2)) + 1))
+                return units
+        # Otherwise same-stage calibrated composition
+        n_u = int(rng.integers(max(2, min(8, stage // 3 + 1)), min(9, max(4, stage // 3 + 3)) + 1))
         chosen = rng.choice(len(all_pokes), size=n_u, replace=False)
         units = [
             BoardUnit.from_pokemon_stats(
                 all_pokes[idx],
                 x=int(rng.integers(0, 6)),
                 y=int(rng.integers(0, 4)),
-                num_items=int(rng.integers(0, 3)),
+                num_items=int(rng.integers(0, min(3, stage // 8 + 1))),
             )
             for idx in chosen
         ]
-        return TacticalPositioner.optimize_positions(units), stage
+        return TacticalPositioner.optimize_positions(units, in_place=True)
 
     for i in range(num_samples):
-        board_a, st_a = sample_board()
-        board_b, st_b = sample_board()
-        stage = (st_a + st_b) // 2
+        stage = int(rng.integers(3, 32))
+        board_a = sample_board_at_stage(stage)
+        board_b = sample_board_at_stage(stage)
         outcome = sim.simulate(board_a, board_b, stage_level=stage, rng=rng)
         ua, sa = encode_board_to_tensor(board_a)
         ub, sb = encode_board_to_tensor(board_b)

@@ -91,6 +91,24 @@ def main() -> None:
         choices=list(PRESETS.keys()),
         help="Preset de duração/escala (quick_verify, standard_gpu, heavy_gpu, full_day_gpu)",
     )
+    parser.add_argument(
+        "--ablation-mode",
+        type=str,
+        default="D",
+        choices=["A", "B", "C", "D"],
+        help=(
+            "Modo experimental controlado: "
+            "A=1 Agente vs Oponentes Fixos (sem lookahead/PBT), "
+            "B=Self-Play 8 Agentes (sem lookahead/PBT), "
+            "C=Self-Play + Surrogate Lookahead (sem PBT), "
+            "D=Liga Completa 35 Agentes + Conselho Especializado + Lookahead + PFSP Histórico + PBT"
+        ),
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Retoma o treinamento a partir de checkpoint_league_state.pt na pasta de saída, se existir",
+    )
     parser.add_argument("--device", type=str, default="auto", help="cuda ou cpu")
     parser.add_argument("--output-dir", type=str, default="resultados/gpu_run", help="Pasta de saída dos resultados")
     args = parser.parse_args()
@@ -102,9 +120,9 @@ def main() -> None:
     t0 = time.time()
     print("=" * 94)
     print(" POKÉMON AUTO CHESS (PAC v6.11) — COMUNIDADE DE AGENTES RL EM DOIS NÍVEIS (GPU SCALE)")
-    print(f" Dispositivo: {device} ({gpu_name}) | Preset: {args.preset.upper()}")
+    print(f" Dispositivo: {device} ({gpu_name}) | Preset: {args.preset.upper()} | Modo Ablação: {args.ablation_mode}")
     print(" • Nível 1: Cada Player = Conselho de 7 Sub-Modelos Especialistas + Meta-Arbitrador Transformer")
-    print(" • Nível 2: 35 Agentes em Self-Play Real (Lobby de 8 Players + Baralho Finito Compartilhado)")
+    print(" • Nível 2: Self-Play Real (Lobby de 8 Players + Baralho Finito Compartilhado + PFSP Histórico)")
     print(" • Híbrido: Busca Lookahead 1-Passo na GPU com DeepSetTransformerSurrogate + Zero Priors Manuais")
     print("=" * 94)
 
@@ -131,7 +149,7 @@ def main() -> None:
     counter_df = compute_synergy_counter_matrix(repo, sim, duels_per_pair=cfg["counter_duels_per_pair"])
     counter_df.to_csv(out_dir / "matriz_counters_31x31.csv", index=False, encoding="utf-8")
 
-    # 3. Treinamento do DeepSetTransformerSurrogate (que será usado AO VIVO no Lookahead!)
+    # 3. Treinamento do DeepSetTransformerSurrogate (no mesmo estágio + máscara de padding)
     print(f"\n[3/5] Treinando `DeepSetTransformerSurrogate` (4 camadas, d_model=256, n={cfg['surrogate_samples']})...")
     surrogate_model, surr_metrics = train_deep_gpu_surrogate(
         repo=repo,
@@ -143,35 +161,48 @@ def main() -> None:
     torch.save(surrogate_model.state_dict(), out_dir / "deep_surrogate_weights.pt")
     print(
         f"  -> Deep Surrogate Val Accuracy: {surr_metrics['val_accuracy']*100:.2f}% | "
-        f"MAE Sobreviventes: {surr_metrics['val_margin_mae']:.2f} (Conectado ao Lookahead Planner!)"
+        f"MAE Sobreviventes: {surr_metrics['val_margin_mae']:.2f} (Same-Stage Distribution + Padding Mask!)"
     )
 
     # 4. Treinamento em Self-Play Real (8 Agentes por Lobby + Baralho Compartilhado + Conselho de 7 Modelos)
-    print(
-        f"\n[4/5] Iniciando Self-Play Multi-Agente (35 Agentes | {cfg['generations']} Gerações x "
-        f"{cfg['lobbies_per_gen']} Lobbies de 8 Players)..."
-    )
     league = MegaCommunityLeagueTrainer(
         repo=repo,
         sim=sim,
         surrogate=surrogate_model,
         device=device,
         seed=42,
+        ablation_mode=args.ablation_mode,
     )
     gen_records = []
+    start_gen = 1
+    ckpt_path = out_dir / "checkpoint_league_state.pt"
+    if args.resume and ckpt_path.exists():
+        loaded_gen, gen_records = league.load_checkpoint(str(ckpt_path))
+        start_gen = loaded_gen + 1
+        print(f"  [RESUME] Checkpoint restaurado de `{ckpt_path.name}` na Geração {loaded_gen}!")
+
+    print(
+        f"\n[4/5] Iniciando Self-Play Multi-Agente ({len(league.agents)} Agentes | Modo {args.ablation_mode} | "
+        f"Gerações {start_gen}..{cfg['generations']} x {cfg['lobbies_per_gen']} Lobbies de 8 Players)..."
+    )
     syn_map = {r["Synergy"]: r for r in comp_records_df.to_dict(orient="records")}
 
-    for gen in range(1, cfg["generations"] + 1):
+    for gen in range(start_gen, cfg["generations"] + 1):
         t_gen = time.time()
         metrics_list = league.train_and_evaluate_generation(
             generation=gen,
             lobbies_per_generation=cfg["lobbies_per_gen"],
         )
+        eval_rec = league.evaluate_against_fixed_benchmark(
+            generation=gen,
+            num_eval_lobbies=max(2, min(6, cfg["lobbies_per_gen"] // 3)),
+        )
         best_ag = max(league.agents, key=lambda a: a.elo_rating)
         best_m = min(metrics_list, key=lambda m: m.avg_placement)
         print(
             f"  [Geração {gen:03d}/{cfg['generations']:03d} | {time.time()-t_gen:.1f}s] "
-            f"Melhor Placement Gen: {best_m.agent_name} (Place={best_m.avg_placement:.2f}, Top4={best_m.top4_rate*100:.0f}%) | "
+            f"Treino Melhor: {best_m.agent_name} (Place={best_m.avg_placement:.2f}) | "
+            f"Benchmark Fixo: Place={eval_rec['placement_eval']:.2f}, Top4={eval_rec['top4_eval_%']:.0f}% | "
             f"Líder ELO: {best_ag.config.name} ({best_ag.elo_rating:.0f} ELO)"
         )
         for m in metrics_list:
@@ -188,11 +219,15 @@ def main() -> None:
                 "Avg_3Star": round(m.avg_3star_evos, 2),
             })
 
-        # Checkpoint periódico a cada 5 gerações ou na última geração
+        # Salva checkpoint completo da liga (pesos, otimizadores, normalizadores e logs)
+        league.save_checkpoint(str(ckpt_path), generation=gen, gen_records=gen_records)
+
+        # Exporta relatórios completos a cada 5 gerações ou na última geração
         if gen % 5 == 0 or gen == cfg["generations"]:
             _export_current_snapshot(
                 league=league,
                 args_preset=args.preset,
+                ablation_mode=args.ablation_mode,
                 gpu_name=gpu_name,
                 summary=summary,
                 surr_metrics=surr_metrics,
@@ -210,6 +245,9 @@ def main() -> None:
     elapsed = time.time() - t0
     print("\n" + "=" * 94)
     print(f" Experimento GPU Sem Atalhos concluído em {elapsed/60.0:.1f} min!")
+    print(f"  • Checkpoint Completo Resumível    : {out_dir / 'checkpoint_league_state.pt'}")
+    print(f"  • Diagnósticos PPO & Recompensas   : {out_dir / 'ppo_diagnostics_telemetry.csv'}")
+    print(f"  • Benchmark Fixo Independente      : {out_dir / 'fixed_benchmark_eval.csv'}")
     print(f"  • PDF Completo dos Resultados      : {out_dir / 'relatorio_experimento_gpu_pac_rl.pdf'}")
     print(f"  • Pacote JSON para IA (8 Blocos)   : {out_dir / 'pacote_analise_ia.json'}")
     print(f"  • Prompt Pronto para IA            : {out_dir / 'PROMPT_PARA_IA_ANALISAR.md'}")
@@ -220,6 +258,7 @@ def main() -> None:
 def _export_current_snapshot(
     league: MegaCommunityLeagueTrainer,
     args_preset: str,
+    ablation_mode: str,
     gpu_name: str,
     summary: dict,
     surr_metrics: dict,
@@ -239,7 +278,18 @@ def _export_current_snapshot(
     council_df = league.get_council_telemetry_dataframe()
     council_df.to_csv(out_dir / "telemetria_conselho_7_especialistas.csv", index=False, encoding="utf-8")
 
-    distilled_reports = league.distill_gpu_council_agents(top_k=10, lobbies_sample=viper_lobbies)
+    if league.ppo_telemetry_log:
+        pd.DataFrame(league.ppo_telemetry_log).to_csv(
+            out_dir / "ppo_diagnostics_telemetry.csv", index=False, encoding="utf-8"
+        )
+    if league.eval_benchmark_log:
+        pd.DataFrame(league.eval_benchmark_log).to_csv(
+            out_dir / "fixed_benchmark_eval.csv", index=False, encoding="utf-8"
+        )
+
+    distilled_reports = league.distill_gpu_council_agents(
+        top_k=min(10, len(league.agents)), lobbies_sample=viper_lobbies
+    )
 
     # Ranking dos Top 15 Agentes da Liga por ELO / Placement Real
     ranked_agents = sorted(league.agents, key=lambda a: a.elo_rating, reverse=True)[:15]
@@ -275,9 +325,12 @@ def _export_current_snapshot(
     json_out_path = out_dir / "results_report_gpu.json"
     export_payload = {
         "experiment_preset": args_preset,
+        "ablation_mode": ablation_mode,
         "gpu_device": gpu_name,
         "data_summary": summary,
         "combat_surrogate_metrics": surr_metrics,
+        "fixed_benchmark_evaluation": league.eval_benchmark_log,
+        "ppo_diagnostics_telemetry": league.ppo_telemetry_log[-35:],
         "botv2_meta_top15": bot_meta_df.head(25).to_dict(orient="records"),
         "composition_damage_tank_records": comp_records_df.to_dict(orient="records"),
         "global_top_dps_pokemon": top_dps_global_df.to_dict(orient="records"),
@@ -305,7 +358,7 @@ def _export_current_snapshot(
     gerar_pdf_resultados(
         json_out_path,
         out_dir / "relatorio_experimento_gpu_pac_rl.pdf",
-        titulo_experimento=f"POKÉMON AUTO CHESS — RELATÓRIO GPU ({args_preset.upper()} - CONSELHO 7 MODELOS & SELF-PLAY)",
+        titulo_experimento=f"POKÉMON AUTO CHESS — RELATÓRIO GPU ({args_preset.upper()} | MODO {ablation_mode})",
     )
     gerar_pacote_analise_ia(json_out_path, out_dir)
 
