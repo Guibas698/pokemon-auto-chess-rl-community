@@ -24,6 +24,7 @@ import torch.nn.functional as F
 from .data_loader import (
     ARMOR_FACTOR,
     NUM_SYNERGIES,
+    RARITY_COST,
     SYNERGIES,
     SYNERGY_TO_IDX,
     SYNERGY_THRESHOLDS,
@@ -798,6 +799,81 @@ class TacticalPositioner:
             assign_slot(u, [(5, 0), (0, 0), (4, 1), (1, 1)] + backline_slots)
 
         return units
+
+
+class ItemAllocationOracle:
+    """
+    Oráculo de Realocação Dinâmica de Itens (`ItemAllocationOracle`):
+    Corrige a lacuna crítica de itemização identificada nas janelas de estágio 10–17:
+    - Garante que nenhum item fique preso no banco (`bench`) ou esquecido em unidades
+      iniciais de custo 1 quando um Carry de custo alto / Unique (estágio 10) / Legendary (estágio 20)
+      entra no tabuleiro.
+    - Distribui o inventário total de itens (`total_items`) priorizando:
+      1º Carry Principal (maior DPS escalado por raridade e estrelas, até 3 itens),
+      2º Tank Principal de Linha de Frente (maior EHP, até 3 itens),
+      3º Carry Secundário / Bruiser.
+    """
+
+    @staticmethod
+    def allocate_items(
+        board: List[BoardUnit],
+        bench: Optional[List[BoardUnit]] = None,
+        total_items: int = 0,
+    ) -> None:
+        if bench:
+            for u in bench:
+                u.num_items = 0
+        if not board:
+            return
+        for u in board:
+            u.num_items = 0
+        if total_items <= 0:
+            return
+
+        def carry_score(u: BoardUnit) -> float:
+            r_cost = float(RARITY_COST.get(u.rarity, 3))
+            dps = u.atk * (0.45 + 0.011 * u.speed) * (1.20 if u.attack_range >= 2 else 1.0)
+            return dps * (u.stars ** 1.35) * (1.0 + 0.15 * r_cost)
+
+        def tank_score(u: BoardUnit) -> float:
+            r_cost = float(RARITY_COST.get(u.rarity, 3))
+            ehp = u.hp * (1.0 + ARMOR_FACTOR * (u.defense + u.spe_def))
+            front_bonus = 1.30 if u.attack_range <= 1 else 0.75
+            return ehp * (u.stars ** 1.25) * front_bonus * (1.0 + 0.10 * r_cost)
+
+        remaining = int(total_items)
+        primary_carry = max(board, key=carry_score)
+        give_c = min(3, remaining)
+        primary_carry.num_items = give_c
+        remaining -= give_c
+        if remaining <= 0 or len(board) == 1:
+            return
+
+        others = [u for u in board if u is not primary_carry]
+        primary_tank = max(others, key=tank_score)
+        give_t = min(3, remaining)
+        primary_tank.num_items = give_t
+        remaining -= give_t
+        if remaining <= 0:
+            return
+
+        rest = sorted(
+            [u for u in others if u is not primary_tank],
+            key=carry_score,
+            reverse=True,
+        )
+        for u in rest:
+            give = min(3, remaining)
+            u.num_items = give
+            remaining -= give
+            if remaining <= 0:
+                break
+
+    @staticmethod
+    def compute_board_value(board: List[BoardUnit]) -> float:
+        """Retorna o valor total de raridade × estrelas (`sum(cost * stars)`) do tabuleiro."""
+        return float(sum(RARITY_COST.get(u.rarity, 3) * u.stars for u in board))
+
 
 
 def train_combat_surrogate(

@@ -41,6 +41,7 @@ from .data_loader import (
 from .combat_surrogate import (
     BoardUnit,
     FastCombatSimulator,
+    ItemAllocationOracle,
     TacticalPositioner,
     compute_active_synergies,
     encode_synergy_vector,
@@ -171,7 +172,7 @@ class PokemonAutoChessGymEnv(gym.Env):
     def set_reward_config(self, config: RewardWeightConfig) -> None:
         self.reward_config = config
 
-    def _unit_power(self, u: BoardUnit) -> float:
+    def _unit_power(self, u: BoardUnit, include_items: bool = True) -> float:
         """Heuristic combat value of a single unit on board/bench."""
         rarity_bonus = {
             "COMMON": 1.0,
@@ -187,7 +188,8 @@ class PokemonAutoChessGymEnv(gym.Env):
         syn_bonus = 0.0
         if self.reward_config.target_synergy and self.reward_config.target_synergy in u.types:
             syn_bonus = 1.25
-        return float(stat_score * rarity_bonus * star_mult * (1.0 + 0.15 * u.num_items) + syn_bonus)
+        item_mult = (1.0 + 0.15 * u.num_items) if include_items else 1.0
+        return float(stat_score * rarity_bonus * star_mult * item_mult + syn_bonus)
 
     def compute_board_power(self, units: Optional[List[BoardUnit]] = None) -> float:
         target = self.board if units is None else units
@@ -239,7 +241,7 @@ class PokemonAutoChessGymEnv(gym.Env):
                 score += 2.0
         return score
 
-    def _try_add_or_evolve(self, p: PokemonStats) -> Tuple[bool, int]:
+    def _try_add_or_evolve(self, p: PokemonStats, force_make_room: bool = False) -> Tuple[bool, int]:
         """
         Adds `p` to the player's roster and checks for 3-of-a-kind evolutions
         (chain reactions 1* -> 2* -> 3* just like `count-evolution-handler.ts`).
@@ -248,16 +250,24 @@ class PokemonAutoChessGymEnv(gym.Env):
         new_unit = BoardUnit.from_pokemon_stats(p, num_items=0)
         if len(self.board) < self.level:
             self.board.append(new_unit)
-            TacticalPositioner.optimize_positions(self.board)
+            TacticalPositioner.optimize_positions(self.board, in_place=True)
         elif len(self.bench) < 6:
             self.bench.append(new_unit)
         elif self._count_copies_owned(p.name) >= 2:
             # Direct merge on purchase even when bench is full!
             self.bench.append(new_unit)
+        elif force_make_room and self.bench:
+            # Sell the weakest non-core bench unit so Unique/Legendary/Additional picks are never lost!
+            weakest_idx = int(np.argmin([self._unit_power(u, include_items=False) for u in self.bench]))
+            sold = self.bench.pop(weakest_idx)
+            p_st = self.repo.get_pokemon(sold.name)
+            self.gold += max(1, (p_st.cost if p_st else 1) * (2 if sold.stars == 2 else 1))
+            self.bench.append(new_unit)
         else:
             return False, 0
 
         evo_tier = self._check_evolutions()
+        ItemAllocationOracle.allocate_items(self.board, self.bench, total_items=self.items_held)
         return True, evo_tier
 
     def _check_evolutions(self) -> int:
@@ -306,16 +316,19 @@ class PokemonAutoChessGymEnv(gym.Env):
                         self.total_evolutions_3star += 1
                         highest_evo = max(highest_evo, 3)
 
-                    TacticalPositioner.optimize_positions(self.board)
+                    TacticalPositioner.optimize_positions(self.board, in_place=True)
                     changed = True
                     break
         return highest_evo
 
     def _handle_special_stage_propositions(self) -> None:
         """
-        Handles PAC's Additional Picks (stages 5, 8, 11) and Portal Unique/Legendary
-        Propositions (stages 10, 20) tailored to the player's active board synergies.
+        Handles PAC's Additional Picks (stages 5, 8, 11), Portal Carousel Items
+        (stages 4, 12, 17, 22, 27, 32), and Unique/Legendary Propositions (stages 10, 20).
         """
+        if self.stage_level in PORTAL_CAROUSEL_STAGES:
+            self.items_held += 1
+
         if self.stage_level in ADDITIONAL_PICKS_STAGES:
             idx = ADDITIONAL_PICKS_STAGES.index(self.stage_level)
             rarity = ["UNCOMMON", "RARE", "EPIC"][idx]
@@ -325,26 +338,31 @@ class PokemonAutoChessGymEnv(gym.Env):
                 choices = [pool[i] for i in self.rng.choice(len(pool), size=n_choices, replace=False)]
                 best = max(choices, key=lambda p: self._count_family_synergy_fit(p) + (p.hp / 200.0))
                 self.additional_pool_Unlocked.append(best)
-                self._try_add_or_evolve(best)
+                self._try_add_or_evolve(best, force_make_room=True)
 
         elif self.stage_level in (10, 20):
             pool = self.repo.uniques_pool if self.stage_level == 10 else self.repo.legendaries_pool
             if pool:
-                n_choices = min(3, len(pool))
-                # Sort pool by synergy alignment with current board, sample from top candidates
                 scored = sorted(pool, key=lambda p: self._count_family_synergy_fit(p) + self.rng.random() * 0.5, reverse=True)
                 best = scored[0]
-                self._try_add_or_evolve(best)
+                self._try_add_or_evolve(best, force_make_room=True)
 
     def _auto_optimize_roster(self) -> None:
         """
-        Ensures `len(self.board) == min(self.level, len(self.board) + len(self.bench))`
-        and places the highest-value/synergistic units on the board before combat starts.
+        Ensures `len(self.board) == min(self.level, len(self.board) + len(self.bench))`,
+        pivots higher-value / higher-star units from bench onto the board (`ValueDiff` fix),
+        positions units on the 6x4 grid, and dynamically reallocates `self.items_held`
+        via `ItemAllocationOracle`.
         """
-        while len(self.board) < self.level and self.bench:
-            best_idx = int(np.argmax([self._unit_power(u) for u in self.bench]))
-            self.board.append(self.bench.pop(best_idx))
-        TacticalPositioner.optimize_positions(self.board)
+        all_owned = self.board + self.bench
+        if not all_owned:
+            return
+        all_owned.sort(key=lambda u: self._unit_power(u, include_items=False), reverse=True)
+        k_board = min(self.level, len(all_owned))
+        self.board = all_owned[:k_board]
+        self.bench = all_owned[k_board:k_board + 6]
+        TacticalPositioner.optimize_positions(self.board, in_place=True)
+        ItemAllocationOracle.allocate_items(self.board, self.bench, total_items=self.items_held)
 
     def _update_opponents_for_stage(self) -> None:
         """Updates the 7 opponent boards for the current `stage_level` from `botv2.json`."""

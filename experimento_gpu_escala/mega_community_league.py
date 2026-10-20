@@ -34,6 +34,7 @@ import torch
 from pac_rl.combat_surrogate import (
     BoardUnit,
     FastCombatSimulator,
+    ItemAllocationOracle,
     TacticalPositioner,
     compute_active_synergies,
     encode_synergy_vector,
@@ -45,6 +46,7 @@ from pac_rl.data_loader import (
     EXP_TABLE,
     MAX_LEVEL,
     NUM_SYNERGIES,
+    PORTAL_CAROUSEL_STAGES,
     PVE_STAGES,
     SHOP_SIZE,
     SYNERGY_THRESHOLDS,
@@ -421,7 +423,12 @@ class MegaCommunityLeagueTrainer:
                 score += 2.0
         return score
 
-    def _try_add_or_evolve(self, seat: SeatPlayerState, p: PokemonSpec) -> Tuple[bool, int]:
+    def _try_add_or_evolve(
+        self,
+        seat: SeatPlayerState,
+        p: PokemonSpec,
+        force_make_room: bool = False,
+    ) -> Tuple[bool, int]:
         new_u = BoardUnit.from_pokemon_stats(p, num_items=0)
         if len(seat.board) < seat.level:
             seat.board.append(new_u)
@@ -430,11 +437,25 @@ class MegaCommunityLeagueTrainer:
             seat.bench.append(new_u)
         elif self._count_copies(seat, p.name) >= 2:
             seat.bench.append(new_u)
+        elif force_make_room and seat.bench:
+            # Libera vaga no banco vendendo a unidade mais fraca para não perder Unique/Legendary/Additional Pick!
+            weakest_idx = min(
+                range(len(seat.bench)),
+                key=lambda idx: (seat.bench[idx].hp + seat.bench[idx].atk * 8.0) * seat.bench[idx].stars,
+            )
+            sold = seat.bench.pop(weakest_idx)
+            self.shared_pool.return_to_pool(sold)
+            p_st = self.repo.get_pokemon(sold.name)
+            base_c = p_st.cost if p_st else 1
+            sell_val = max(1, base_c * (2 if sold.stars == 2 else (4 if sold.stars >= 3 else 1)))
+            seat.gold += sell_val
+            seat.bench.append(new_u)
         else:
             return False, 0
 
         self.shared_pool.take_from_pool(p.name, copies=1)
         evo_tier = self._check_evolutions(seat)
+        ItemAllocationOracle.allocate_items(seat.board, seat.bench, total_items=seat.items_held)
         return True, evo_tier
 
     def _check_evolutions(self, seat: SeatPlayerState) -> int:
@@ -782,6 +803,8 @@ class MegaCommunityLeagueTrainer:
             # 1. Special Stage Propositions (Additional Picks 5, 8, 11 & Unique/Legendary 10, 20)
             for s in alive_seats:
                 cfg = self.agents[s.agent_idx].config
+                if stage in PORTAL_CAROUSEL_STAGES:
+                    s.items_held += 1
                 if stage in ADDITIONAL_PICKS_STAGES:
                     idx_p = ADDITIONAL_PICKS_STAGES.index(stage)
                     rarity = ["UNCOMMON", "RARE", "EPIC"][idx_p]
@@ -790,12 +813,12 @@ class MegaCommunityLeagueTrainer:
                         choices = [pool[i] for i in self.rng.choice(len(pool), size=min(3, len(pool)), replace=False)]
                         best_p = max(choices, key=lambda p: self._synergy_fit(s, cfg, p) + p.hp / 200.0)
                         self.shared_pool.unlock_additional_pick_for_lobby(best_p)
-                        self._try_add_or_evolve(s, best_p)
+                        self._try_add_or_evolve(s, best_p, force_make_room=True)
                 elif stage in (10, 20):
                     pool = self.repo.uniques_pool if stage == 10 else self.repo.legendaries_pool
                     if pool:
                         best_p = max(pool, key=lambda p: self._synergy_fit(s, cfg, p) + self.rng.random() * 0.4)
-                        self._try_add_or_evolve(s, best_p)
+                        self._try_add_or_evolve(s, best_p, force_make_room=True)
 
             # 2. Fase de Loja e Planejamento Lookahead para cada um dos 8 Agentes Vivos
             for s in alive_seats:
@@ -816,7 +839,7 @@ class MegaCommunityLeagueTrainer:
 
                 if self.enable_lookahead:
                     base_wp, shop_deltas = self.planner.evaluate_shop_marginal_gains(
-                        s.board, s.shop, s.level, opp_boards
+                        s.board, s.shop, s.level, opp_boards, total_items=s.items_held
                     )
                 else:
                     base_wp = 0.5
@@ -877,7 +900,7 @@ class MegaCommunityLeagueTrainer:
                             s.shop = self.shared_pool.sample_shop(s.level, self.rng)
                             if self.enable_lookahead:
                                 s.last_surrogate_win_prob, s.last_shop_deltas = self.planner.evaluate_shop_marginal_gains(
-                                    s.board, s.shop, s.level, opp_boards
+                                    s.board, s.shop, s.level, opp_boards, total_items=s.items_held
                                 )
                             else:
                                 s.last_shop_deltas = np.zeros(6, dtype=np.float32)
@@ -906,7 +929,7 @@ class MegaCommunityLeagueTrainer:
                             elif s.board:
                                 if self.enable_lookahead:
                                     s.board, s.bench = self.planner.optimize_roster_with_surrogate(
-                                        s.board, s.bench, s.level, opp_boards
+                                        s.board, s.bench, s.level, opp_boards, total_items=s.items_held
                                     )
                                 else:
                                     s.board[0], s.bench[b_idx] = s.bench[b_idx], s.board[0]
@@ -922,6 +945,7 @@ class MegaCommunityLeagueTrainer:
                             base_c = p_st.cost if p_st else 1
                             sell_val = max(1, base_c * (2 if sold.stars == 2 else (4 if sold.stars >= 3 else 1)))
                             s.gold += sell_val
+                            ItemAllocationOracle.allocate_items(s.board, s.bench, total_items=s.items_held)
                         s.actions_this_stage += 1
 
                     if board_changed:
@@ -955,10 +979,11 @@ class MegaCommunityLeagueTrainer:
                 # Antes do combate começar, aplica a busca combinatória 1-Step Lookahead (se habilitada) ou posicionamento tático
                 if self.enable_lookahead:
                     s.board, s.bench = self.planner.optimize_roster_with_surrogate(
-                        s.board, s.bench, s.level, opp_boards
+                        s.board, s.bench, s.level, opp_boards, total_items=s.items_held
                     )
                 else:
-                    s.board = TacticalPositioner.optimize_positions(s.board)
+                    s.board = TacticalPositioner.optimize_positions(s.board, in_place=True)
+                ItemAllocationOracle.allocate_items(s.board, s.bench, total_items=s.items_held)
 
             # 3. Fase de Combate Tático (PvE ou Pareamento Direto entre os Agentes Vivos do Lobby)
             is_pve = stage in PVE_STAGES
@@ -971,9 +996,7 @@ class MegaCommunityLeagueTrainer:
                         self._record_unit_telemetry(ag, out.unit_logs_a)
                     if out.winner >= 0:
                         s.items_held += 1
-                        if s.board:
-                            carry = max(s.board, key=lambda u: u.atk * u.stars)
-                            carry.num_items = min(3, carry.num_items + 1)
+                        ItemAllocationOracle.allocate_items(s.board, s.bench, total_items=s.items_held)
                     else:
                         s.hp = max(0, s.hp - out.damage_to_loser)
 

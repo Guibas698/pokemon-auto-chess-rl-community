@@ -32,6 +32,7 @@ from pac_rl.combat_surrogate import (
     UNIT_FEATURE_DIM,
     BoardUnit,
     FastCombatSimulator,
+    ItemAllocationOracle,
     TacticalPositioner,
     clone_board,
     encode_board_to_tensor,
@@ -59,8 +60,16 @@ NUM_EXPERTS = len(EXPERT_NAMES)
 
 
 def get_optimal_device(preferred: str = "auto") -> torch.device:
-    if preferred == "cuda" or (preferred == "auto" and torch.cuda.is_available()):
+    pref = preferred.lower()
+    if pref == "cuda" or (pref == "auto" and torch.cuda.is_available()):
         return torch.device("cuda")
+    if pref in ("dml", "directml") or pref == "auto":
+        try:
+            import torch_directml  # type: ignore
+            return torch_directml.device()
+        except ImportError:
+            if pref in ("dml", "directml"):
+                return torch.device("cpu")
     return torch.device("cpu")
 
 
@@ -284,14 +293,20 @@ class NeuralLookaheadRosterPlanner:
         shop: List[Optional[PokemonSpec]],
         player_level: int,
         opponent_boards: List[List[BoardUnit]],
+        total_items: Optional[int] = None,
     ) -> Tuple[float, np.ndarray]:
         r"""
         Para o estado atual, usa o `DeepSetTransformerSurrogate` na GPU para calcular:
         1. `base_win_prob`: Chance de vitória atual do tabuleiro contra o lobby
         2. `marginal_gains[0..5]`: $\Delta \widehat{P}_{\text{win}}$ se comprarmos/colocarmos a carta `shop[i]`!
-        Usa cópias independentes (`clone_board`) para NUNCA alterar `x, y` do `board` original.
+        Usa cópias independentes (`clone_board`) para NUNCA alterar `x, y` do `board` original
+        e aplica `ItemAllocationOracle.allocate_items` nas simulações contrafactuais para não penalizar
+        a substituição de uma unidade 1-custo que segurava itens!
         """
-        candidates: List[List[BoardUnit]] = [clone_board(board)]
+        n_items = int(sum(u.num_items for u in board)) if total_items is None else int(total_items)
+        base_clone = clone_board(board)
+        ItemAllocationOracle.allocate_items(base_clone, total_items=n_items)
+        candidates: List[List[BoardUnit]] = [base_clone]
         valid_slot_indices: List[int] = []
 
         for slot_i, p in enumerate(shop):
@@ -301,13 +316,17 @@ class NeuralLookaheadRosterPlanner:
             if len(board) < player_level:
                 hyp_board = TacticalPositioner.optimize_positions(clone_board(board) + [new_u], in_place=True)
             elif board:
-                # Simulate replacing the lowest-HP/lowest-star unit on a deep-cloned board
-                weak_idx = min(range(len(board)), key=lambda idx: board[idx].hp * board[idx].stars)
+                # Substitui a unidade de menor poder intrínseco (sem viés de itens atuais) num clone profundo
+                weak_idx = min(
+                    range(len(board)),
+                    key=lambda idx: (board[idx].hp + board[idx].atk * 8.0) * board[idx].stars,
+                )
                 hyp_board = clone_board(board)
                 hyp_board[weak_idx] = new_u
                 hyp_board = TacticalPositioner.optimize_positions(hyp_board, in_place=True)
             else:
                 hyp_board = [new_u]
+            ItemAllocationOracle.allocate_items(hyp_board, total_items=n_items)
             candidates.append(hyp_board)
             valid_slot_indices.append(slot_i)
 
@@ -326,38 +345,56 @@ class NeuralLookaheadRosterPlanner:
         bench: List[BoardUnit],
         player_level: int,
         opponent_boards: List[List[BoardUnit]],
+        total_items: Optional[int] = None,
     ) -> Tuple[List[BoardUnit], List[BoardUnit]]:
         r"""
-        Algoritmo Clássico de Busca Local (1-Step Swap Hill-Climbing) guiado pelo
-        `DeepSetTransformerSurrogate`: testa todas as trocas unitárias entre `board` e `bench`
-        em um único batch na GPU usando cópias independentes (`clone_board`) e aplica a troca
-        apenas se ela aumentar a chance real de vitória!
+        Algoritmo Clássico de Busca Local (Multi-Swap Hill-Climbing) guiado pelo
+        `DeepSetTransformerSurrogate`:
+        - Testa TODAS as vagas do banco `range(len(bench))` (incluindo slots 4..5 onde entram
+          proposições Unique no estágio 10 e Legendary no estágio 20).
+        - Transfere dinamicamente os itens via `ItemAllocationOracle.allocate_items` em cada
+          candidato para que substituir uma unidade 1-custo portadora de itens transfira os itens
+          para o novo Carry de custo alto!
         """
+        n_items = (
+            int(sum(u.num_items for u in board) + sum(u.num_items for u in bench))
+            if total_items is None
+            else int(total_items)
+        )
         while len(board) < player_level and bench:
             board.append(bench.pop(0))
 
         board = TacticalPositioner.optimize_positions(board, in_place=True)
+        ItemAllocationOracle.allocate_items(board, bench, total_items=n_items)
         if not bench or not board:
             return board, bench
 
-        candidates: List[List[BoardUnit]] = [clone_board(board)]
-        swap_pairs: List[Tuple[int, int]] = []
+        for _ in range(2):
+            base_cand = clone_board(board)
+            ItemAllocationOracle.allocate_items(base_cand, total_items=n_items)
+            candidates: List[List[BoardUnit]] = [base_cand]
+            swap_pairs: List[Tuple[int, int]] = []
 
-        for b_idx in range(len(board)):
-            for bench_idx in range(min(4, len(bench))):
-                cand = clone_board(board)
-                cand[b_idx] = bench[bench_idx].clone()
-                candidates.append(TacticalPositioner.optimize_positions(cand, in_place=True))
-                swap_pairs.append((b_idx, bench_idx))
+            for b_idx in range(len(board)):
+                for bench_idx in range(len(bench)):
+                    cand = clone_board(board)
+                    cand[b_idx] = bench[bench_idx].clone()
+                    cand = TacticalPositioner.optimize_positions(cand, in_place=True)
+                    ItemAllocationOracle.allocate_items(cand, total_items=n_items)
+                    candidates.append(cand)
+                    swap_pairs.append((b_idx, bench_idx))
 
-        probs = self.predict_win_prob_vs_lobby(candidates, opponent_boards)
-        best_cand_idx = int(np.argmax(probs))
-        if best_cand_idx > 0 and probs[best_cand_idx] > probs[0] + 0.01:
-            b_i, bench_i = swap_pairs[best_cand_idx - 1]
-            old_board_u = board[b_i]
-            board[b_i] = bench[bench_i]
-            bench[bench_i] = old_board_u
-            board = TacticalPositioner.optimize_positions(board, in_place=True)
+            probs = self.predict_win_prob_vs_lobby(candidates, opponent_boards)
+            best_cand_idx = int(np.argmax(probs))
+            if best_cand_idx > 0 and probs[best_cand_idx] > probs[0] + 0.008:
+                b_i, bench_i = swap_pairs[best_cand_idx - 1]
+                old_board_u = board[b_i]
+                board[b_i] = bench[bench_i]
+                bench[bench_i] = old_board_u
+                board = TacticalPositioner.optimize_positions(board, in_place=True)
+                ItemAllocationOracle.allocate_items(board, bench, total_items=n_items)
+            else:
+                break
 
         return board, bench
 
@@ -366,8 +403,7 @@ class NeuralLookaheadRosterPlanner:
 # Comunidade Interna de Modelos: 7 Peritos Especialistas + Meta-Arbitrador
 # ============================================================================
 
-# Fatias de domínio primário (dentro dos 87 primeiros índices universais) para dar
-# viés indutivo estrutural distinto a cada um dos 7 Especialistas:
+# Fatias de domínio primário para o layout GPU 188 dims:
 EXPERT_DOMAIN_SLICES: List[Tuple[int, int]] = [
     (0, 12),   # 0. Economist_Compound_Expert: Stage, HP, Gold, Interest, Level, XP, Streaks
     (4, 18),   # 1. WinStreak_Tempo_Expert: Level, Streaks, Board Size, Relative Power, 2*/3*, Alive
@@ -376,6 +412,17 @@ EXPERT_DOMAIN_SLICES: List[Tuple[int, int]] = [
     (42, 73),  # 4. Synergy_Vertical_Expert: Vetor das 31 Sinergias Ativas no Tabuleiro
     (8, 42),   # 5. LobbyScout_Counter_Expert: Board/Bench Density + Shop Counter Options
     (0, 18),   # 6. LateGame_Cap_Expert: Stage, Level, Free Slots, 2*/3*, Max Synergy Tier
+]
+
+# Fatias de domínio remapeadas para o layout 126/149 de `rl/suite_complexa/bc.py` (loja 19:55, âncoras 73:104):
+SUITE_COMPLEXA_DOMAIN_SLICES: List[Tuple[int, int]] = [
+    (0, 12),
+    (4, 18),
+    (0, 14),
+    (19, 55),
+    (73, 104),
+    (8, 55),
+    (0, 18),
 ]
 
 
@@ -504,6 +551,7 @@ class CommunityOfModelsBrain(nn.Module):
         detach_critic_trunk: bool = True,
         num_species_vocab: int = 1150,
         species_emb_dim: int = 16,
+        domain_slices: Optional[List[Tuple[int, int]]] = None,
     ):
         super().__init__()
         if persona_range[1] - persona_range[0] != 39:
@@ -515,6 +563,15 @@ class CommunityOfModelsBrain(nn.Module):
         self.detach_critic_trunk = detach_critic_trunk
         self.num_species_vocab = num_species_vocab
         self.species_emb_dim = species_emb_dim
+
+        # Fatias de domínio: usa FATIAS_NOSSAS (suite_complexa) para layout 126/149 ou EXPERT_DOMAIN_SLICES para 188
+        if domain_slices is not None:
+            slices = domain_slices
+        elif obs_dim in (CUSTOM_126_OBS_DIM, 149):
+            slices = SUITE_COMPLEXA_DOMAIN_SLICES
+        else:
+            slices = EXPERT_DOMAIN_SLICES
+        self.domain_slices = slices
 
         # Embedding compartilhado de espécie para Loja (6), Tabuleiro (9, mean+max pool) e Banco (8):
         # 6*emb (shop slots) + 2*emb (board mean+max pool) + 8*emb (bench slots) = 16 * species_emb_dim
@@ -529,7 +586,7 @@ class CommunityOfModelsBrain(nn.Module):
                     obs_dim,
                     expert_dim,
                     num_actions,
-                    domain_slice=EXPERT_DOMAIN_SLICES[m],
+                    domain_slice=slices[m],
                 )
                 for m in range(NUM_EXPERTS)
             ]
